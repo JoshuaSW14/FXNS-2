@@ -177,22 +177,8 @@ export default function DashboardPage() {
     };
 
     const handleTestDraft = async (draftId: string) => {
-        try {
-            const response = await fetch(`/api/tool-builder/drafts/${draftId}/test`, {
-                method: 'POST',
-                credentials: 'include',
-                headers: { 'X-Requested-With': 'fetch' }
-            });
-            if (response.ok) {
-                // Invalidate relevant queries instead of page reload
-                await Promise.all([
-                    queryClient.invalidateQueries({ queryKey: ['/api/me/dashboard'] }),
-                    queryClient.invalidateQueries({ queryKey: ['/api/tool-builder/drafts'] })
-                ]);
-            }
-        } catch (error) {
-            console.error('Failed to test draft:', error);
-        }
+        // Navigate to the tool builder with the draft ID and jump to test step
+        setLocation(`/create-tool?draft=${draftId}&step=3`);
     };
 
     const handlePublishDraft = async (draftId: string) => {

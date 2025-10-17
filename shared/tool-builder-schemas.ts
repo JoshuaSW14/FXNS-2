@@ -234,6 +234,14 @@ export const ConditionConfigSchema = z.object({
     value: z.string(),
   }),
   then: z.array(z.any()), // Will be LogicStep[] but avoiding circular reference
+  elseIf: z.array(z.object({
+    condition: z.object({
+      fieldId: z.string(),
+      operator: z.enum(['equals', 'not_equals', 'greater_than', 'less_than', 'contains']),
+      value: z.string(),
+    }),
+    then: z.array(z.any()),
+  })).optional(),
   else: z.array(z.any()).optional(),
 });
 
@@ -260,10 +268,19 @@ export const APICallConfigSchema = z.object({
   body: z.record(z.any()).optional(),
 });
 
+export const SwitchConfigSchema = z.object({
+  fieldId: z.string(),
+  cases: z.array(z.object({
+    value: z.string(),
+    then: z.array(z.any()), // Will be LogicStep[] but avoiding circular reference
+  })),
+  default: z.array(z.any()).optional(), // Default case for unmatched values
+});
+
 export const LogicStepSchema = z.object({
   id: z.string(),
   name: z.string().optional(),
-  type: z.enum(['calculation', 'condition', 'transform', 'custom', 'ai_analysis', 'api_call']),
+  type: z.enum(['calculation', 'condition', 'transform', 'custom', 'ai_analysis', 'api_call', 'switch']),
   position: z.object({
     x: z.number(),
     y: z.number(),
@@ -275,6 +292,7 @@ export const LogicStepSchema = z.object({
     custom: CustomConfigSchema.optional(),
     aiAnalysis: AIAnalysisConfigSchema.optional(),
     apiCall: APICallConfigSchema.optional(),
+    switch: SwitchConfigSchema.optional(),
   }),
   connections: z.array(z.string()).optional(),
 });
@@ -289,9 +307,18 @@ export const OutputSectionSchema = z.object({
   visible: z.boolean().default(true),
 });
 
+export const FieldMappingSchema = z.object({
+  fieldId: z.string(),
+  label: z.string(),
+  format: z.enum(['text', 'currency', 'date', 'percentage', 'number', 'boolean']).optional(),
+  order: z.number().optional(),
+});
+
 export const OutputConfigSchema = z.object({
-  format: z.enum(['text', 'json', 'table', 'chart']),
-  sections: z.array(OutputSectionSchema),
+  format: z.enum(['text', 'json', 'table', 'markdown', 'card']),
+  sections: z.array(OutputSectionSchema).optional(),
+  fieldMappings: z.array(FieldMappingSchema).optional(),
+  customTemplate: z.string().optional(),
 });
 
 // Tool Draft Schemas
@@ -332,12 +359,14 @@ export const ToolDraftSchema = z.object({
 export type FormFieldOption = z.infer<typeof FormFieldOptionSchema>;
 export type FormField = z.infer<typeof FormFieldSchema>;
 export type Variable = z.infer<typeof VariableSchema>;
+export type FieldMapping = z.infer<typeof FieldMappingSchema>;
 export type CalculationConfig = z.infer<typeof CalculationConfigSchema>;
 export type ConditionConfig = z.infer<typeof ConditionConfigSchema>;
 export type TransformConfig = z.infer<typeof TransformConfigSchema>;
 export type CustomConfig = z.infer<typeof CustomConfigSchema>;
 export type AIAnalysisConfig = z.infer<typeof AIAnalysisConfigSchema>;
 export type APICallConfig = z.infer<typeof APICallConfigSchema>;
+export type SwitchConfig = z.infer<typeof SwitchConfigSchema>;
 export type LogicStep = z.infer<typeof LogicStepSchema>;
 export type OutputSection = z.infer<typeof OutputSectionSchema>;
 export type OutputConfig = z.infer<typeof OutputConfigSchema>;

@@ -9,6 +9,12 @@ import { Badge } from "@/components/ui/badge";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { ProBadge } from "@/components/ui/pro-badge";
 import { ProUpgradeDialog } from "@/components/ui/pro-upgrade-dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { useAuth } from "@/hooks/use-auth";
 import { 
   Plus, 
@@ -59,10 +65,17 @@ const stepTypes = [
   },
   { 
     value: 'condition', 
-    label: 'If/Then', 
+    label: 'If/Then/Else', 
     icon: GitBranch, 
-    description: 'Conditional logic branching',
+    description: 'Conditional logic with if/else-if/else branches',
     color: 'bg-green-100 text-green-800 border-green-200'
+  },
+  { 
+    value: 'switch', 
+    label: 'Switch/Case', 
+    icon: Workflow, 
+    description: 'Multi-way branching based on value matching',
+    color: 'bg-teal-100 text-teal-800 border-teal-200'
   },
   { 
     value: 'transform', 
@@ -104,6 +117,71 @@ const transformTypes = [
   { value: 'extract_domain', label: 'Extract Domain' }
 ];
 
+// Component for step type selection dropdown
+interface StepTypeSelectorProps {
+  onSelect: (type: LogicStep['type']) => void;
+  isPro: boolean;
+  onProFeatureClick: (stepLabel: string) => void;
+  buttonClassName?: string;
+  buttonVariant?: 'default' | 'ghost' | 'outline';
+}
+
+function StepTypeSelector({ 
+  onSelect, 
+  isPro, 
+  onProFeatureClick,
+  buttonClassName = "h-6 text-xs",
+  buttonVariant = "ghost"
+}: StepTypeSelectorProps) {
+  const proStepTypes = new Set(['ai_analysis', 'api_call']);
+
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button variant={buttonVariant} size="sm" className={buttonClassName}>
+          <Plus className="h-3 w-3 mr-1" />
+          Add Step
+          <ChevronDown className="h-3 w-3 ml-1" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="w-64">
+        {stepTypes.map((stepType) => {
+          const Icon = stepType.icon;
+          const isProFeature = proStepTypes.has(stepType.value);
+          const isLocked = isProFeature && !isPro;
+
+          return (
+            <DropdownMenuItem
+              key={stepType.value}
+              onClick={() => {
+                if (isLocked) {
+                  onProFeatureClick(stepType.label);
+                } else {
+                  onSelect(stepType.value as LogicStep['type']);
+                }
+              }}
+              className="cursor-pointer"
+            >
+              <div className="flex items-center gap-3 w-full">
+                <div className={`p-1.5 rounded ${stepType.color}`}>
+                  <Icon className="h-3.5 w-3.5" />
+                </div>
+                <div className="flex-1">
+                  <div className="flex items-center gap-2">
+                    <span className="font-medium text-sm">{stepType.label}</span>
+                    {isProFeature && <ProBadge size="sm" />}
+                  </div>
+                  <div className="text-xs text-gray-500">{stepType.description}</div>
+                </div>
+              </div>
+            </DropdownMenuItem>
+          );
+        })}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
 export default function LogicFlowBuilder({ 
   steps, 
   formFields, 
@@ -111,6 +189,7 @@ export default function LogicFlowBuilder({
 }: LogicFlowBuilderProps) {
   const { user } = useAuth();
   const [selectedStep, setSelectedStep] = useState<string | null>(null);
+  const [expandedSteps, setExpandedSteps] = useState<Set<string>>(new Set());
   const [viewMode, setViewMode] = useState<'list' | 'visual'>('list');
   const [showProUpgrade, setShowProUpgrade] = useState(false);
   const [pendingProFeature, setPendingProFeature] = useState<string>('');
@@ -154,7 +233,16 @@ export default function LogicFlowBuilder({
           value: ''
         },
         then: [],
+        elseIf: [],
         else: []
+      };
+    } else if (type === 'switch') {
+      newStep.config.switch = {
+        fieldId: formFields[0]?.id || '',
+        cases: [
+          { value: '', then: [] }
+        ],
+        default: []
       };
     } else if (type === 'transform') {
       newStep.config.transform = {
@@ -194,6 +282,371 @@ export default function LogicFlowBuilder({
   }, [steps, onChange, selectedStep]);
 
   const selectedStepData = selectedStep ? steps.find(s => s.id === selectedStep) : null;
+
+  const toggleStepExpansion = useCallback((stepId: string) => {
+    setExpandedSteps(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(stepId)) {
+        newSet.delete(stepId);
+      } else {
+        newSet.add(stepId);
+      }
+      return newSet;
+    });
+  }, []);
+
+  // Helper to add nested steps to branches
+  const addNestedStep = useCallback((path: string, stepType: LogicStep['type'] = 'calculation') => {
+    const pathParts = path.split('.');
+    const newSteps = [...steps];
+    
+    // Create new step with required properties
+    const newStep: LogicStep = {
+      id: generateId(),
+      type: stepType,
+      position: { x: 0, y: 0 },
+      connections: [],
+      config: {}
+    };
+
+    // Initialize config based on type
+    if (stepType === 'calculation') {
+      newStep.config.calculation = {
+        formula: '',
+        variables: []
+      };
+    } else if (stepType === 'condition') {
+      newStep.config.condition = {
+        if: {
+          fieldId: formFields[0]?.id || '',
+          operator: 'equals',
+          value: ''
+        },
+        then: [],
+        elseIf: [],
+        else: []
+      };
+    } else if (stepType === 'switch') {
+      newStep.config.switch = {
+        fieldId: formFields[0]?.id || '',
+        cases: [{ value: '', then: [] }],
+        default: []
+      };
+    } else if (stepType === 'transform') {
+      newStep.config.transform = {
+        inputFieldId: formFields[0]?.id || '',
+        transformType: 'uppercase'
+      };
+    } else if (stepType === 'ai_analysis') {
+      newStep.config.aiAnalysis = {
+        prompt: '',
+        inputFields: [],
+        outputFormat: 'text'
+      };
+    } else if (stepType === 'api_call') {
+      newStep.config.apiCall = {
+        method: 'GET',
+        url: '',
+        headers: {},
+        body: {}
+      };
+    }
+    
+    // Navigate to the target array and add the step
+    const stepIndex = newSteps.findIndex(s => s.id === pathParts[0]);
+    if (stepIndex !== -1) {
+      // Navigate through the config to find the target array
+      let target: any = newSteps[stepIndex].config;
+      
+      for (let j = 1; j < pathParts.length - 1; j++) {
+        const p = pathParts[j];
+        if (p.includes('[')) {
+          const [k, idx] = p.split('[');
+          const index = parseInt(idx.replace(']', ''));
+          
+          // Ensure the array exists and has the element
+          if (!target[k] || !Array.isArray(target[k])) {
+            target[k] = [];
+          }
+          if (!target[k][index]) {
+            target[k][index] = {};
+          }
+          target = target[k][index];
+        } else {
+          // Ensure the property exists
+          if (!target[p]) {
+            target[p] = {};
+          }
+          target = target[p];
+        }
+      }
+      
+      // Add to the final array
+      const finalPart = pathParts[pathParts.length - 1];
+      if (!target[finalPart] || !Array.isArray(target[finalPart])) {
+        target[finalPart] = [];
+      }
+      target[finalPart].push(newStep);
+    }
+    
+    onChange(newSteps);
+    setSelectedStep(newStep.id);
+  }, [steps, formFields, onChange]);
+
+  // Helper to remove nested steps
+  const removeNestedStep = useCallback((path: string, stepId: string) => {
+    const pathParts = path.split('.');
+    const newSteps = [...steps];
+    
+    // Navigate to the parent array and remove the step
+    const stepIndex = newSteps.findIndex(s => s.id === pathParts[0]);
+    if (stepIndex !== -1) {
+      let target: any = newSteps[stepIndex].config;
+      
+      for (let i = 1; i < pathParts.length - 1; i++) {
+        const part = pathParts[i];
+        if (part.includes('[')) {
+          const [key, idx] = part.split('[');
+          const index = parseInt(idx.replace(']', ''));
+          
+          // Safely navigate
+          if (!target[key] || !Array.isArray(target[key]) || !target[key][index]) {
+            return; // Path doesn't exist, nothing to remove
+          }
+          target = target[key][index];
+        } else {
+          // Safely navigate
+          if (!target[part]) {
+            return; // Path doesn't exist, nothing to remove
+          }
+          target = target[part];
+        }
+      }
+      
+      // Remove from the final array
+      const finalPart = pathParts[pathParts.length - 1];
+      if (target[finalPart] && Array.isArray(target[finalPart])) {
+        const removeIndex = target[finalPart].findIndex((s: LogicStep) => s.id === stepId);
+        if (removeIndex !== -1) {
+          target[finalPart].splice(removeIndex, 1);
+        }
+      }
+    }
+    
+    onChange(newSteps);
+    if (selectedStep === stepId) {
+      setSelectedStep(null);
+    }
+  }, [steps, selectedStep, onChange]);
+
+  // Simpler step rendering without drag-drop for now
+  const renderStep = useCallback((step: LogicStep, depth: number = 0, parentPath: string = '') => {
+    const stepType = stepTypes.find(st => st.value === step.type);
+    const Icon = stepType?.icon || Calculator;
+    const isExpanded = expandedSteps.has(step.id);
+    
+    return (
+      <div key={step.id} className="mb-3" style={{ marginLeft: depth > 0 ? `${depth * 20}px` : '0' }}>
+        <Card className={`${isExpanded ? 'border-blue-300' : ''}`}>
+          <CardContent className="p-3">
+            {/* Step Header */}
+            <div className="flex items-center gap-2">
+              <div className={`p-1.5 rounded ${stepType?.color || 'bg-gray-100'}`}>
+                <Icon className="h-4 w-4" />
+              </div>
+              
+              <div className="flex-1 min-w-0">
+                <div className="text-sm font-medium">{stepType?.label}</div>
+                {!isExpanded && (
+                  <div className="text-xs text-gray-500 truncate">
+                    {getStepDescription(step)}
+                  </div>
+                )}
+              </div>
+
+              <div className="flex gap-1">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => toggleStepExpansion(step.id)}
+                  className="h-7 w-7 p-0"
+                >
+                  {isExpanded ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => parentPath ? removeNestedStep(parentPath, step.id) : removeStep(step.id)}
+                  className="h-7 w-7 p-0 text-red-600 hover:bg-red-50"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </Button>
+              </div>
+            </div>
+
+            {/* Configuration */}
+            {isExpanded && (
+              <div className="mt-3 pt-3 border-t">
+                {step.type === 'calculation' && step.config.calculation && (
+                  <CalculationConfig
+                    step={step}
+                    formFields={formFields}
+                    onChange={(config) => updateStep(step.id, { config })}
+                  />
+                )}
+                
+                {step.type === 'condition' && step.config.condition && (
+                  <ConditionConfig
+                    step={step}
+                    formFields={formFields}
+                    onChange={(config) => updateStep(step.id, { config })}
+                  />
+                )}
+                
+                {step.type === 'switch' && step.config.switch && (
+                  <SwitchConfig
+                    step={step}
+                    formFields={formFields}
+                    onChange={(config) => updateStep(step.id, { config })}
+                  />
+                )}
+                
+                {step.type === 'transform' && step.config.transform && (
+                  <TransformConfig
+                    step={step}
+                    formFields={formFields}
+                    onChange={(config) => updateStep(step.id, { config })}
+                  />
+                )}
+                
+                {step.type === 'ai_analysis' && step.config.aiAnalysis && (
+                  <AIAnalysisConfig
+                    step={step}
+                    formFields={formFields}
+                    onChange={(config) => updateStep(step.id, { config })}
+                  />
+                )}
+                
+                {step.type === 'api_call' && step.config.apiCall && (
+                  <APICallConfig
+                    step={step}
+                    formFields={formFields}
+                    onChange={(config) => updateStep(step.id, { config })}
+                  />
+                )}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+        
+        {/* Nested Branch Steps */}
+        {step.type === 'condition' && step.config.condition && isExpanded && (
+          <div className="mt-2 space-y-2">
+            {/* THEN */}
+            <div className="ml-4">
+              <div className="flex items-center gap-2 mb-1">
+                <Badge className="bg-green-100 text-green-800">THEN</Badge>
+                <StepTypeSelector
+                  onSelect={(type) => addNestedStep(`${step.id}.then`, type)}
+                  isPro={isPro}
+                  onProFeatureClick={(label) => {
+                    setPendingProFeature(label);
+                    setShowProUpgrade(true);
+                  }}
+                />
+              </div>
+              {step.config.condition.then?.map((nestedStep: LogicStep, idx: number) => 
+                renderStep(nestedStep, depth + 1, `${step.id}.then`)
+              )}
+            </div>
+            
+            {/* ELSE-IF */}
+            {step.config.condition.elseIf?.map((elseIfBranch: any, idx: number) => (
+              <div key={idx} className="ml-4">
+                <div className="flex items-center gap-2 mb-1">
+                  <Badge className="bg-yellow-100 text-yellow-800">ELSE IF {idx + 1}</Badge>
+                  <StepTypeSelector
+                    onSelect={(type) => addNestedStep(`${step.id}.elseIf[${idx}].then`, type)}
+                    isPro={isPro}
+                    onProFeatureClick={(label) => {
+                      setPendingProFeature(label);
+                      setShowProUpgrade(true);
+                    }}
+                  />
+                </div>
+                {elseIfBranch.then?.map((nestedStep: LogicStep) => 
+                  renderStep(nestedStep, depth + 1, `${step.id}.elseIf[${idx}].then`)
+                )}
+              </div>
+            ))}
+            
+            {/* ELSE */}
+            {step.config.condition.else !== undefined && (
+              <div className="ml-4">
+                <div className="flex items-center gap-2 mb-1">
+                  <Badge className="bg-red-100 text-red-800">ELSE</Badge>
+                  <StepTypeSelector
+                    onSelect={(type) => addNestedStep(`${step.id}.else`, type)}
+                    isPro={isPro}
+                    onProFeatureClick={(label) => {
+                      setPendingProFeature(label);
+                      setShowProUpgrade(true);
+                    }}
+                  />
+                </div>
+                {step.config.condition.else?.map((nestedStep: LogicStep) => 
+                  renderStep(nestedStep, depth + 1, `${step.id}.else`)
+                )}
+              </div>
+            )}
+          </div>
+        )}
+        
+        {/* Switch Branches */}
+        {step.type === 'switch' && step.config.switch && isExpanded && (
+          <div className="mt-2 space-y-2">
+            {step.config.switch.cases?.map((caseItem: any, idx: number) => (
+              <div key={idx} className="ml-4">
+                <div className="flex items-center gap-2 mb-1">
+                  <Badge className="bg-teal-100 text-teal-800">CASE: {caseItem.value}</Badge>
+                  <StepTypeSelector
+                    onSelect={(type) => addNestedStep(`${step.id}.cases[${idx}].then`, type)}
+                    isPro={isPro}
+                    onProFeatureClick={(label) => {
+                      setPendingProFeature(label);
+                      setShowProUpgrade(true);
+                    }}
+                  />
+                </div>
+                {caseItem.then?.map((nestedStep: LogicStep) => 
+                  renderStep(nestedStep, depth + 1, `${step.id}.cases[${idx}].then`)
+                )}
+              </div>
+            ))}
+            
+            {step.config.switch.default !== undefined && (
+              <div className="ml-4">
+                <div className="flex items-center gap-2 mb-1">
+                  <Badge className="bg-gray-100 text-gray-800">DEFAULT</Badge>
+                  <StepTypeSelector
+                    onSelect={(type) => addNestedStep(`${step.id}.default`, type)}
+                    isPro={isPro}
+                    onProFeatureClick={(label) => {
+                      setPendingProFeature(label);
+                      setShowProUpgrade(true);
+                    }}
+                  />
+                </div>
+                {step.config.switch.default?.map((nestedStep: LogicStep) => 
+                  renderStep(nestedStep, depth + 1, `${step.id}.default`)
+                )}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  }, [expandedSteps, toggleStepExpansion, addNestedStep, removeNestedStep, isPro, setPendingProFeature, setShowProUpgrade, removeStep, updateStep, formFields]);
 
   // Show visual flow designer if in visual mode
   if (viewMode === 'visual') {
@@ -245,6 +698,14 @@ export default function LogicFlowBuilder({
                   />
                 )}
                 
+                {selectedStepData.type === 'switch' && (
+                  <SwitchConfig
+                    step={selectedStepData}
+                    formFields={formFields}
+                    onChange={(config) => updateStep(selectedStepData.id, { config })}
+                  />
+                )}
+                
                 {selectedStepData.type === 'transform' && (
                   <TransformConfig
                     step={selectedStepData}
@@ -285,150 +746,60 @@ export default function LogicFlowBuilder({
   }
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-      {/* Step Types Palette */}
-      <div className="space-y-4">
-        <h3 className="text-lg font-semibold">Logic Steps</h3>
-        
-        <div className="grid grid-cols-1 gap-2">
-          {stepTypes.map((stepType) => {
-            const Icon = stepType.icon;
-            const isProStep = proStepTypes.has(stepType.value);
-            const isDisabled = isProStep && !isPro;
-            
-            return (
-              <Button
-                key={stepType.value}
-                variant="outline"
-                className={`justify-between h-auto p-3 ${
-                  isDisabled 
-                    ? 'opacity-75 hover:bg-orange-50 hover:border-orange-300' 
-                    : 'hover:bg-gray-50'
-                }`}
-                onClick={() => handleProFeatureClick(stepType.value, stepType.label)}
-              >
-                <div className="flex items-start">
-                  <Icon className={`h-4 w-4 mr-2 mt-0.5 ${isDisabled ? 'text-gray-400' : ''}`} />
-                  <div className="text-left">
-                    <div className={`font-medium ${isDisabled ? 'text-gray-400' : ''}`}>
-                      {stepType.label}
-                    </div>
-                    <div className={`text-xs ${isDisabled ? 'text-gray-300' : 'text-gray-500'}`}>
-                      {stepType.description}
-                    </div>
-                  </div>
-                </div>
-                {isProStep && !isPro && (
-                  <ProBadge size="sm" />
-                )}
-              </Button>
-            );
-          })}
-        </div>
-
-        <div className="mt-6 p-4 bg-gray-50 rounded-lg">
-          <h4 className="font-medium mb-2">Available Fields</h4>
-          <div className="space-y-1">
-            {formFields.map((field) => (
-              <Badge key={field.id} variant="outline" className="text-xs">
-                {field.label}
-              </Badge>
-            ))}
-            {formFields.length === 0 && (
-              <p className="text-xs text-gray-500">
-                Add form fields first to use in logic
-              </p>
-            )}
-          </div>
-        </div>
-      </div>
-
+    <div className="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-6">
       {/* Logic Flow Canvas */}
       <div className="space-y-4">
         <div className="flex items-center justify-between">
           <h3 className="text-lg font-semibold">Logic Flow</h3>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => setViewMode('visual')}
-            className="flex items-center gap-2"
-          >
-            <Workflow className="h-4 w-4" />
-            Visual Flow
-          </Button>
+          <div className="flex gap-2">
+            <StepTypeSelector
+              onSelect={(type) => addStep(type)}
+              isPro={isPro}
+              onProFeatureClick={(label) => {
+                setPendingProFeature(label);
+                setShowProUpgrade(true);
+              }}
+            />
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setViewMode('visual')}
+              className="flex items-center gap-2"
+            >
+              <Workflow className="h-4 w-4" />
+              Visual Flow
+            </Button>
+          </div>
         </div>
         
         <div className="space-y-3">
           {steps.length === 0 ? (
             <div className="border-2 border-dashed border-gray-300 rounded-lg p-8 text-center">
-              <p className="text-gray-500">
+              <p className="text-gray-500 mb-4">
                 Add logic steps to define your tool's behavior
               </p>
+              <StepTypeSelector
+                onSelect={(type) => addStep(type)}
+                isPro={isPro}
+                onProFeatureClick={(label) => {
+                  setPendingProFeature(label);
+                  setShowProUpgrade(true);
+                }}
+              />
             </div>
           ) : (
-            steps.map((step, index) => {
-              const stepType = stepTypes.find(st => st.value === step.type);
-              const Icon = stepType?.icon || Calculator;
-              
-              return (
-                <div key={step.id} className="space-y-2">
-                  <Card
-                    className={`${
-                      selectedStep === step.id
-                        ? 'ring-2 ring-blue-500'
-                        : ''
-                    } cursor-pointer transition-all`}
-                    onClick={() => setSelectedStep(step.id)}
-                  >
-                    <CardContent className="p-4">
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-3">
-                          <div className={`p-2 rounded-lg ${stepType?.color}`}>
-                            <Icon className="h-4 w-4" />
-                          </div>
-                          
-                          <div>
-                            <div className="font-medium">{stepType?.label}</div>
-                            <div className="text-sm text-gray-500">
-                              {getStepDescription(step)}
-                            </div>
-                          </div>
-                        </div>
-                        
-                        <div className="flex items-center gap-2">
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setSelectedStep(step.id);
-                            }}
-                          >
-                            <Settings className="h-4 w-4" />
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              removeStep(step.id);
-                            }}
-                          >
-                            <Trash2 className="h-4 w-4" />
-                          </Button>
-                        </div>
-                      </div>
-                    </CardContent>
-                  </Card>
-                  
+            <>
+              {steps.map((step, index) => (
+                <div key={step.id}>
+                  {renderStep(step, 0, '')}
                   {index < steps.length - 1 && (
-                    <div className="flex justify-center">
+                    <div className="flex justify-center my-2">
                       <ArrowDown className="h-4 w-4 text-gray-400" />
                     </div>
                   )}
                 </div>
-              );
-            })
+              ))}
+            </>
           )}
         </div>
       </div>
@@ -455,6 +826,14 @@ export default function LogicFlowBuilder({
               
               {selectedStepData.type === 'condition' && (
                 <ConditionConfig
+                  step={selectedStepData}
+                  formFields={formFields}
+                  onChange={(config) => updateStep(selectedStepData.id, { config })}
+                />
+              )}
+              
+              {selectedStepData.type === 'switch' && (
+                <SwitchConfig
                   step={selectedStepData}
                   formFields={formFields}
                   onChange={(config) => updateStep(selectedStepData.id, { config })}
@@ -651,13 +1030,58 @@ function ConditionConfig({
   const condition = step.config.condition || {
     if: { fieldId: '', operator: 'equals', value: '' },
     then: [],
+    elseIf: [],
     else: []
+  };
+
+  const addElseIfBranch = () => {
+    onChange({
+      ...step.config,
+      condition: {
+        ...condition,
+        elseIf: [
+          ...(condition.elseIf || []),
+          {
+            condition: {
+              fieldId: formFields[0]?.id || '',
+              operator: 'equals',
+              value: ''
+            },
+            then: []
+          }
+        ]
+      }
+    });
+  };
+
+  const removeElseIfBranch = (index: number) => {
+    const newElseIf = [...(condition.elseIf || [])];
+    newElseIf.splice(index, 1);
+    onChange({
+      ...step.config,
+      condition: {
+        ...condition,
+        elseIf: newElseIf
+      }
+    });
+  };
+
+  const updateElseIfBranch = (index: number, updates: any) => {
+    const newElseIf = [...(condition.elseIf || [])];
+    newElseIf[index] = { ...newElseIf[index], ...updates };
+    onChange({
+      ...step.config,
+      condition: {
+        ...condition,
+        elseIf: newElseIf
+      }
+    });
   };
 
   return (
     <div className="space-y-4">
-      <div>
-        <Label>If condition</Label>
+      <div className="p-3 bg-green-50 border border-green-200 rounded-lg">
+        <Label className="text-green-800 font-semibold">IF Condition</Label>
         <div className="grid grid-cols-3 gap-2 mt-2">
           <Select
             value={condition.if.fieldId}
@@ -715,11 +1139,243 @@ function ConditionConfig({
             placeholder="Value"
           />
         </div>
+        <p className="text-xs text-green-700 mt-2">
+          Actions will execute if this condition is true
+        </p>
       </div>
-      
-      <div className="text-sm text-gray-600">
-        <p>Then/Else logic will be expanded in future versions</p>
+
+      {/* Else-If Branches */}
+      {condition.elseIf && condition.elseIf.map((elseIfBranch: any, index: number) => (
+        <div key={index} className="p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
+          <div className="flex items-center justify-between mb-2">
+            <Label className="text-yellow-800 font-semibold">ELSE IF Condition {index + 1}</Label>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => removeElseIfBranch(index)}
+              className="h-6 w-6 p-0 text-red-600 hover:text-red-700"
+            >
+              <X className="h-4 w-4" />
+            </Button>
+          </div>
+          <div className="grid grid-cols-3 gap-2">
+            <Select
+              value={elseIfBranch.condition.fieldId}
+              onValueChange={(value) => updateElseIfBranch(index, {
+                condition: { ...elseIfBranch.condition, fieldId: value }
+              })}
+            >
+              <SelectTrigger>
+                <SelectValue placeholder="Select field" />
+              </SelectTrigger>
+              <SelectContent>
+                {formFields.map((field) => (
+                  <SelectItem key={field.id} value={field.id}>
+                    {field.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            
+            <Select
+              value={elseIfBranch.condition.operator}
+              onValueChange={(value) => updateElseIfBranch(index, {
+                condition: { ...elseIfBranch.condition, operator: value }
+              })}
+            >
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {operators.map((op) => (
+                  <SelectItem key={op.value} value={op.value}>
+                    {op.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            
+            <Input
+              value={elseIfBranch.condition.value}
+              onChange={(e) => updateElseIfBranch(index, {
+                condition: { ...elseIfBranch.condition, value: e.target.value }
+              })}
+              placeholder="Value"
+            />
+          </div>
+          <p className="text-xs text-yellow-700 mt-2">
+            Actions will execute if IF is false and this condition is true
+          </p>
+        </div>
+      ))}
+
+      {/* Add Else-If Button */}
+      <Button
+        variant="outline"
+        size="sm"
+        onClick={addElseIfBranch}
+        className="w-full border-dashed"
+      >
+        <Plus className="h-4 w-4 mr-2" />
+        Add Else-If Branch
+      </Button>
+
+      {/* Else Branch */}
+      <div className="p-3 bg-gray-100 border border-gray-300 rounded-lg">
+        <Label className="text-gray-800 font-semibold">ELSE (Default)</Label>
+        <p className="text-xs text-gray-600 mt-2">
+          Actions will execute if all above conditions are false
+        </p>
       </div>
+
+      <Alert>
+        <AlertDescription className="text-xs">
+          <strong>Note:</strong> Conditions are evaluated in order (IF → ELSE IF → ELSE). The first matching condition executes its actions.
+        </AlertDescription>
+      </Alert>
+    </div>
+  );
+}
+
+function SwitchConfig({ 
+  step, 
+  formFields, 
+  onChange 
+}: { 
+  step: LogicStep; 
+  formFields: FormField[]; 
+  onChange: (config: any) => void;
+}) {
+  const switchConfig = step.config.switch || {
+    fieldId: formFields[0]?.id || '',
+    cases: [{ value: '', then: [] }],
+    default: []
+  };
+
+  const addCase = () => {
+    onChange({
+      ...step.config,
+      switch: {
+        ...switchConfig,
+        cases: [
+          ...switchConfig.cases,
+          { value: '', then: [] }
+        ]
+      }
+    });
+  };
+
+  const removeCase = (index: number) => {
+    const newCases = [...switchConfig.cases];
+    newCases.splice(index, 1);
+    onChange({
+      ...step.config,
+      switch: {
+        ...switchConfig,
+        cases: newCases
+      }
+    });
+  };
+
+  const updateCase = (index: number, value: string) => {
+    const newCases = [...switchConfig.cases];
+    newCases[index] = { ...newCases[index], value };
+    onChange({
+      ...step.config,
+      switch: {
+        ...switchConfig,
+        cases: newCases
+      }
+    });
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="p-3 bg-teal-50 border border-teal-200 rounded-lg">
+        <Label className="text-teal-800 font-semibold">Switch On Field</Label>
+        <Select
+          value={switchConfig.fieldId}
+          onValueChange={(value) => onChange({
+            ...step.config,
+            switch: {
+              ...switchConfig,
+              fieldId: value
+            }
+          })}
+        >
+          <SelectTrigger className="mt-2">
+            <SelectValue placeholder="Select field to evaluate" />
+          </SelectTrigger>
+          <SelectContent>
+            {formFields.map((field) => (
+              <SelectItem key={field.id} value={field.id}>
+                {field.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <p className="text-xs text-teal-700 mt-2">
+          The value of this field will be compared against each case
+        </p>
+      </div>
+
+      {/* Case Branches */}
+      <div className="space-y-3">
+        <Label className="text-sm font-semibold">Case Branches</Label>
+        {switchConfig.cases.map((caseItem: any, index: number) => (
+          <div key={index} className="p-3 bg-blue-50 border border-blue-200 rounded-lg">
+            <div className="flex items-center gap-2">
+              <div className="flex-1">
+                <Label className="text-blue-800 text-xs">Case {index + 1}: When value equals</Label>
+                <Input
+                  value={caseItem.value}
+                  onChange={(e) => updateCase(index, e.target.value)}
+                  placeholder="Enter value to match"
+                  className="mt-1"
+                />
+              </div>
+              {switchConfig.cases.length > 1 && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => removeCase(index)}
+                  className="h-8 w-8 p-0 text-red-600 hover:text-red-700 self-end"
+                >
+                  <X className="h-4 w-4" />
+                </Button>
+              )}
+            </div>
+            <p className="text-xs text-blue-700 mt-2">
+              Actions will execute if field value matches "{caseItem.value || '(empty)'}"
+            </p>
+          </div>
+        ))}
+      </div>
+
+      {/* Add Case Button */}
+      <Button
+        variant="outline"
+        size="sm"
+        onClick={addCase}
+        className="w-full border-dashed"
+      >
+        <Plus className="h-4 w-4 mr-2" />
+        Add Case Branch
+      </Button>
+
+      {/* Default Branch */}
+      <div className="p-3 bg-gray-100 border border-gray-300 rounded-lg">
+        <Label className="text-gray-800 font-semibold">DEFAULT (No Match)</Label>
+        <p className="text-xs text-gray-600 mt-2">
+          Actions will execute if the value doesn't match any case
+        </p>
+      </div>
+
+      <Alert>
+        <AlertDescription className="text-xs">
+          <strong>Note:</strong> Cases are checked in order. The first exact match executes its actions. If no match is found, the default branch executes.
+        </AlertDescription>
+      </Alert>
     </div>
   );
 }
@@ -1246,7 +1902,18 @@ function getStepDescription(step: LogicStep): string {
       return step.config.calculation?.formula || 'No formula set';
     case 'condition':
       const cond = step.config.condition;
-      return cond ? `If ${cond.if.fieldId} ${cond.if.operator} ${cond.if.value}` : 'No condition set';
+      if (!cond) return 'No condition set';
+      const elseIfCount = cond.elseIf?.length || 0;
+      const hasElse = cond.else && cond.else.length > 0;
+      let desc = `If ${cond.if.fieldId} ${cond.if.operator} ${cond.if.value}`;
+      if (elseIfCount > 0) desc += ` + ${elseIfCount} else-if`;
+      if (hasElse) desc += ' + else';
+      return desc;
+    case 'switch':
+      const switchConfig = step.config.switch;
+      if (!switchConfig) return 'No switch configured';
+      const caseCount = switchConfig.cases?.length || 0;
+      return `Switch ${switchConfig.fieldId} (${caseCount} cases)`;
     case 'transform':
       const trans = step.config.transform;
       return trans ? `${trans.transformType} ${trans.inputFieldId}` : 'No transform set';

@@ -70,9 +70,11 @@ const LazyDashboard = (props: any) => (
 );
 
 const LazyToolBuilder = (props: any) => (
-  <Suspense fallback={<RouteLoader />}>
-    <VisualToolBuilderPage {...props} />
-  </Suspense>
+  <ErrorBoundary>
+    <Suspense fallback={<RouteLoader />}>
+      <VisualToolBuilderPage {...props} />
+    </Suspense>
+  </ErrorBoundary>
 );
 
 const LazyAdminDashboard = (props: any) => (
@@ -155,9 +157,11 @@ const LazyTools = (props: any) => (
 );
 
 const LazyWorkflowEditor = (props: any) => (
-  <Suspense fallback={<RouteLoader />}>
-    <WorkflowEditorPage {...props} />
-  </Suspense>
+  <ErrorBoundary>
+    <Suspense fallback={<RouteLoader />}>
+      <WorkflowEditorPage {...props} />
+    </Suspense>
+  </ErrorBoundary>
 );
 
 const LazyIntegrations = (props: any) => (

@@ -1,4 +1,4 @@
-import express from 'express';
+import express, { Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 import { db } from './storage';
 import { 
@@ -13,8 +13,13 @@ import { eq, and, desc } from 'drizzle-orm';
 import { nanoid } from 'nanoid';
 import { schedulerService } from './scheduler-service';
 
-const requireAuth = (req: any, res: any, next: any) => {
-  if (!req.isAuthenticated()) {
+interface AuthenticatedRequest extends Request {
+  user?: { id: string; [key: string]: any };
+  isAuthenticated?: () => boolean;
+}
+
+const requireAuth = (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
+  if (!req.isAuthenticated || !req.isAuthenticated()) {
     return res.status(401).json({ error: "Authentication required" });
   }
   next();
@@ -74,7 +79,7 @@ const updateWorkflowSchema = z.object({
 });
 
 // GET /api/workflows - List all workflows for authenticated user
-router.get('/', requireAuth, async (req, res) => {
+router.get('/', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
   try {
     const userId = req.user!.id;
     const { search, category, isPublic, isTemplate } = req.query;
@@ -114,7 +119,7 @@ router.get('/', requireAuth, async (req, res) => {
 });
 
 // GET /api/workflows/:id - Get a single workflow with steps and connections
-router.get('/:id', requireAuth, async (req, res) => {
+router.get('/:id', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
   try {
     const userId = req.user!.id;
     const workflowId = req.params.id;
@@ -187,7 +192,7 @@ router.get('/:id', requireAuth, async (req, res) => {
 });
 
 // POST /api/workflows - Create a new workflow
-router.post('/', requireAuth, async (req, res) => {
+router.post('/', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
   try {
     const userId = req.user!.id;
     const validated = createWorkflowSchema.parse(req.body);
@@ -251,7 +256,7 @@ router.post('/', requireAuth, async (req, res) => {
 });
 
 // PUT /api/workflows/:id - Update a workflow
-router.put('/:id', requireAuth, async (req, res) => {
+router.put('/:id', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
   try {
     const userId = req.user!.id;
     const workflowId = req.params.id;
@@ -347,7 +352,7 @@ router.put('/:id', requireAuth, async (req, res) => {
 });
 
 // DELETE /api/workflows/:id - Delete a workflow
-router.delete('/:id', requireAuth, async (req, res) => {
+router.delete('/:id', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
   try {
     const userId = req.user!.id;
     const workflowId = req.params.id;
@@ -378,7 +383,7 @@ router.delete('/:id', requireAuth, async (req, res) => {
 });
 
 // POST /api/workflows/:id/clone - Clone a workflow
-router.post('/:id/clone', requireAuth, async (req, res) => {
+router.post('/:id/clone', requireAuth, async (req: AuthenticatedRequest, res: Response) => {
   try {
     const userId = req.user!.id;
     const workflowId = req.params.id;

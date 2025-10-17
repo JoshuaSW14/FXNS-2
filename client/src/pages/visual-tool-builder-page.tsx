@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import { useLocation } from "wouter";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useForm } from "react-hook-form";
@@ -14,6 +14,16 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { Separator } from "@/components/ui/separator";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import NavigationHeader from "@/components/navigation-header";
 import { useAuth } from "@/hooks/use-auth";
 import { apiRequest, queryClient } from "@/lib/queryClient";
@@ -29,13 +39,17 @@ import {
   Settings,
   Play,
   ArrowRight,
-  DollarSign
+  DollarSign,
+  Loader2,
+  AlertTriangle,
+  Trash2
 } from "lucide-react";
 
 // Import shared schemas and components
 import { FormField, LogicStep, OutputConfig, createDefaultOutputConfig } from "@shared/tool-builder-schemas";
 import VisualFormDesigner from "@/components/tool-builder/visual-form-designer";
 import LogicFlowBuilder from "@/components/tool-builder/logic-flow-builder";
+import OutputViewDesigner from "@/components/tool-builder/output-view-designer";
 import ToolTestRunner from "@/components/tool-builder/tool-test-runner";
 import TemplateSelector from "@/components/tool-builder/template-selector";
 import { ToolTemplate } from "@shared/tool-templates";
@@ -79,8 +93,9 @@ const STEPS = [
   { id: 'metadata', label: 'Tool Info', icon: FileText },
   { id: 'form', label: 'Input Form', icon: Settings },
   { id: 'logic', label: 'Logic Flow', icon: Wand2 },
+  { id: 'output', label: 'Output View', icon: Eye },
   { id: 'test', label: 'Test & Preview', icon: Play },
-  { id: 'publish', label: 'Publish', icon: Rocket }
+  { id: 'publish', label: 'Pricing & Publish', icon: DollarSign }
 ];
 
 export default function VisualToolBuilderPage() {
@@ -99,6 +114,13 @@ export default function VisualToolBuilderPage() {
   const [showPricingModal, setShowPricingModal] = useState(false);
   const [selectedTagIds, setSelectedTagIds] = useState<string[]>([]);
   
+  // Auto-save and confirmation dialogs
+  const [autoSaveStatus, setAutoSaveStatus] = useState<'saved' | 'saving' | 'error' | null>(null);
+  const [showDiscardDialog, setShowDiscardDialog] = useState(false);
+  const [showDeleteDialog, setShowDeleteDialog] = useState(false);
+  const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
+  const autoSaveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  
   // Form for tool metadata
   const form = useForm<ToolMetadata>({
     resolver: zodResolver(toolMetadataSchema),
@@ -112,6 +134,7 @@ export default function VisualToolBuilderPage() {
   // Dynamic draft ID state for proper query updates
   const urlParams = new URLSearchParams(window.location.search);
   const initialDraftId = urlParams.get("draft");
+  const initialStep = urlParams.get("step");
   const [currentDraftId, setCurrentDraftId] = useState<string | null>(initialDraftId);
   
   // Hide template selector if we have a draft ID
@@ -119,7 +142,14 @@ export default function VisualToolBuilderPage() {
     if (initialDraftId) {
       setShowTemplateSelector(false);
     }
-  }, [initialDraftId]);
+    // Set initial step if provided in URL
+    if (initialStep) {
+      const stepNum = parseInt(initialStep, 10);
+      if (stepNum >= 0 && stepNum < STEPS.length) {
+        setCurrentStep(stepNum);
+      }
+    }
+  }, [initialDraftId, initialStep]);
 
   // Load existing draft if editing
   const { data: existingDraft, error: draftError } = useQuery<{ success: boolean; data: ToolDraft }>({
@@ -209,6 +239,33 @@ export default function VisualToolBuilderPage() {
     }
   }, [existingDraft, form]);
 
+  // Auto-save function with debounce
+  const triggerAutoSave = useCallback(() => {
+    if (autoSaveTimeoutRef.current) {
+      clearTimeout(autoSaveTimeoutRef.current);
+    }
+    
+    setAutoSaveStatus('saving');
+    setHasUnsavedChanges(true);
+    
+    autoSaveTimeoutRef.current = setTimeout(() => {
+      const metadata = form.getValues();
+      const validation = toolMetadataSchema.safeParse(metadata);
+      
+      if (validation.success && draftId) {
+        saveDraftMutation.mutate({
+          name: metadata.name,
+          description: metadata.description,
+          category: metadata.category,
+          inputConfig: formFields,
+          logicConfig: logicSteps,
+          outputConfig: outputConfig,
+          status: 'draft'
+        });
+      }
+    }, 2000); // Auto-save after 2 seconds of inactivity
+  }, [form, formFields, logicSteps, outputConfig, draftId]);
+
   // Save draft mutation
   const saveDraftMutation = useMutation({
     mutationFn: async (data: { 
@@ -219,6 +276,7 @@ export default function VisualToolBuilderPage() {
       logicConfig: LogicStep[];
       outputConfig: OutputConfig;
       status?: 'draft' | 'testing';
+      isAutoSave?: boolean;
     }) => {
       const url = draftId 
         ? `/api/tool-builder/drafts/${draftId}`
@@ -238,28 +296,47 @@ export default function VisualToolBuilderPage() {
       
       if (!response.ok) {
         const errorData = await response.json();
-        throw new Error(errorData.error || 'Failed to save draft');
+        throw new Error(errorData.error?.message || errorData.error || 'Failed to save draft');
       }
       
-      return response.json();
+      return { ...response.json(), isAutoSave: data.isAutoSave };
     },
     onSuccess: (data) => {
-      if (!draftId) {
+      if (!draftId && data.data) {
         setDraftId(data.data.id);
+        setCurrentDraftId(data.data.id);
         // Update URL without reload
         window.history.replaceState({}, '', `?draft=${data.data.id}`);
       }
-      toast({
-        title: "Draft saved!",
-        description: "Your tool has been saved as a draft.",
-      });
+      
+      setHasUnsavedChanges(false);
+      setAutoSaveStatus('saved');
+      
+      // Only show toast for manual saves
+      if (!data.isAutoSave) {
+        toast({
+          title: "Draft saved!",
+          description: "Your tool has been saved as a draft.",
+        });
+      }
+      
+      // Reset auto-save status after 3 seconds
+      setTimeout(() => {
+        setAutoSaveStatus(null);
+      }, 3000);
     },
     onError: (error: Error) => {
+      setAutoSaveStatus('error');
       toast({
         title: "Failed to save",
         description: error.message,
         variant: "destructive",
       });
+      
+      // Reset error status after 5 seconds
+      setTimeout(() => {
+        setAutoSaveStatus(null);
+      }, 5000);
     },
   });
 
@@ -514,6 +591,76 @@ export default function VisualToolBuilderPage() {
     publishMutation.mutate();
   };
 
+  // Delete draft mutation
+  const deleteDraftMutation = useMutation({
+    mutationFn: async () => {
+      if (!draftId) throw new Error('No draft to delete');
+      
+      const response = await apiRequest('DELETE', `/api/tool-builder/drafts/${draftId}`);
+      
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error?.message || 'Failed to delete draft');
+      }
+      
+      return response.json();
+    },
+    onSuccess: () => {
+      toast({
+        title: "Draft deleted",
+        description: "Your draft has been permanently deleted.",
+      });
+      queryClient.invalidateQueries({ queryKey: ['/api/tool-builder/drafts'] });
+      setLocation('/dashboard');
+    },
+    onError: (error: Error) => {
+      toast({
+        title: "Failed to delete draft",
+        description: error.message,
+        variant: "destructive",
+      });
+    },
+  });
+
+  const handleDeleteDraft = () => {
+    setShowDeleteDialog(true);
+  };
+
+  const confirmDeleteDraft = () => {
+    deleteDraftMutation.mutate();
+    setShowDeleteDialog(false);
+  };
+
+  const handleDiscardChanges = () => {
+    setShowDiscardDialog(true);
+  };
+
+  const confirmDiscardChanges = () => {
+    setShowDiscardDialog(false);
+    setHasUnsavedChanges(false);
+    setLocation('/dashboard');
+  };
+
+  // Prevent navigation with unsaved changes
+  useEffect(() => {
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (hasUnsavedChanges) {
+        e.preventDefault();
+        e.returnValue = '';
+      }
+    };
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [hasUnsavedChanges]);
+
+  // Watch for form field and logic changes to trigger auto-save
+  useEffect(() => {
+    if (draftId && (formFields.length > 0 || logicSteps.length > 0)) {
+      triggerAutoSave();
+    }
+  }, [formFields, logicSteps, outputConfig, triggerAutoSave, draftId]);
+
   const progress = ((currentStep + 1) / STEPS.length) * 100;
 
   return (
@@ -535,9 +682,27 @@ export default function VisualToolBuilderPage() {
               </div>
               
               <div className="flex flex-wrap items-center gap-2 sm:gap-3">
+                {/* Auto-save status indicator */}
+                {autoSaveStatus && (
+                  <div className={`flex items-center gap-2 text-xs sm:text-sm ${
+                    autoSaveStatus === 'saved' ? 'text-green-600' : 
+                    autoSaveStatus === 'saving' ? 'text-blue-600' : 
+                    'text-red-600'
+                  }`}>
+                    {autoSaveStatus === 'saving' && <Loader2 className="h-3 w-3 sm:h-4 sm:w-4 animate-spin" />}
+                    {autoSaveStatus === 'saved' && <CheckCircle className="h-3 w-3 sm:h-4 sm:w-4" />}
+                    {autoSaveStatus === 'error' && <AlertTriangle className="h-3 w-3 sm:h-4 sm:w-4" />}
+                    <span className="hidden sm:inline">
+                      {autoSaveStatus === 'saved' ? 'All changes saved' : 
+                       autoSaveStatus === 'saving' ? 'Saving...' : 
+                       'Save failed'}
+                    </span>
+                  </div>
+                )}
+                
                 {createDraftFromPublishedMutation.isPending && (
                   <div className="flex items-center gap-2 text-xs sm:text-sm text-blue-600 w-full sm:w-auto">
-                    <div className="animate-spin rounded-full h-3 w-3 sm:h-4 sm:w-4 border-b-2 border-blue-600"></div>
+                    <Loader2 className="h-3 w-3 sm:h-4 sm:w-4 animate-spin" />
                     <span className="hidden sm:inline">Converting tool for editing...</span>
                     <span className="sm:hidden">Converting...</span>
                   </div>
@@ -550,22 +715,43 @@ export default function VisualToolBuilderPage() {
                   className="flex items-center gap-2 w-full sm:w-auto"
                   size="sm"
                 >
-                  <Save className="h-3 w-3 sm:h-4 sm:w-4" />
+                  {saveDraftMutation.isPending ? (
+                    <Loader2 className="h-3 w-3 sm:h-4 sm:w-4 animate-spin" />
+                  ) : (
+                    <Save className="h-3 w-3 sm:h-4 sm:w-4" />
+                  )}
                   <span className="hidden sm:inline">{saveDraftMutation.isPending ? 'Saving...' : 'Save Draft'}</span>
                   <span className="sm:hidden">Save</span>
                 </Button>
                 
                 {draftId && (
-                  <Button
-                    variant="outline"
-                    onClick={() => setShowPricingModal(true)}
-                    className="flex items-center gap-2 w-full sm:w-auto"
-                    size="sm"
-                  >
-                    <DollarSign className="h-3 w-3 sm:h-4 sm:w-4" />
-                    <span className="hidden sm:inline">Pricing</span>
-                    <span className="sm:hidden">$</span>
-                  </Button>
+                  <>
+                    <Button
+                      variant="outline"
+                      onClick={() => setShowPricingModal(true)}
+                      className="flex items-center gap-2 w-full sm:w-auto"
+                      size="sm"
+                    >
+                      <DollarSign className="h-3 w-3 sm:h-4 sm:w-4" />
+                      <span className="hidden sm:inline">Pricing</span>
+                      <span className="sm:hidden">$</span>
+                    </Button>
+                    
+                    <Button
+                      variant="outline"
+                      onClick={handleDeleteDraft}
+                      disabled={deleteDraftMutation.isPending}
+                      className="flex items-center gap-2 text-red-600 hover:text-red-700 hover:bg-red-50 w-full sm:w-auto"
+                      size="sm"
+                    >
+                      {deleteDraftMutation.isPending ? (
+                        <Loader2 className="h-3 w-3 sm:h-4 sm:w-4 animate-spin" />
+                      ) : (
+                        <Trash2 className="h-3 w-3 sm:h-4 sm:w-4" />
+                      )}
+                      <span className="hidden sm:inline">Delete</span>
+                    </Button>
+                  </>
                 )}
                 
                 {currentStep >= 3 && (
@@ -575,7 +761,11 @@ export default function VisualToolBuilderPage() {
                     className="flex items-center gap-2 w-full sm:w-auto"
                     size="sm"
                   >
-                    <Rocket className="h-3 w-3 sm:h-4 sm:w-4" />
+                    {publishMutation.isPending ? (
+                      <Loader2 className="h-3 w-3 sm:h-4 sm:w-4 animate-spin" />
+                    ) : (
+                      <Rocket className="h-3 w-3 sm:h-4 sm:w-4" />
+                    )}
                     {publishMutation.isPending ? 'Publishing...' : 'Publish'}
                   </Button>
                 )}
@@ -783,7 +973,7 @@ export default function VisualToolBuilderPage() {
                 <div className="text-center mb-6">
                   <h2 className="text-2xl font-bold mb-2">Design Input Form</h2>
                   <p className="text-gray-600">
-                    Drag and drop fields to create your tool's input form
+                    Click field types to add them, then drag to reorder
                   </p>
                 </div>
 
@@ -838,7 +1028,7 @@ export default function VisualToolBuilderPage() {
                     onClick={handleMoveToTesting}
                     className="flex items-center gap-2"
                   >
-                    Next: Test Tool
+                    Next: Output View
                     <ArrowRight className="h-4 w-4" />
                   </Button>
                 </div>
@@ -846,6 +1036,39 @@ export default function VisualToolBuilderPage() {
             )}
 
             {currentStep === 3 && (
+              <div>
+                <div className="text-center mb-6">
+                  <h2 className="text-2xl font-bold mb-2">Design Output View</h2>
+                  <p className="text-gray-600">
+                    Customize how your tool results are displayed to users
+                  </p>
+                </div>
+
+                <OutputViewDesigner
+                  outputConfig={outputConfig}
+                  onChange={setOutputConfig}
+                  formFields={formFields}
+                />
+
+                <div className="flex justify-between pt-6">
+                  <Button
+                    variant="outline"
+                    onClick={() => setCurrentStep(2)}
+                  >
+                    Back
+                  </Button>
+                  <Button
+                    onClick={handleNextStep}
+                    className="flex items-center gap-2"
+                  >
+                    Next: Test Tool
+                    <ArrowRight className="h-4 w-4" />
+                  </Button>
+                </div>
+              </div>
+            )}
+
+            {currentStep === 4 && (
               <div>
                 <div className="text-center mb-6">
                   <h2 className="text-2xl font-bold mb-2">Test Your Tool</h2>
@@ -857,18 +1080,19 @@ export default function VisualToolBuilderPage() {
                 <ToolTestRunner
                   draftId={draftId || ''}
                   formFields={formFields}
+                  outputConfig={outputConfig}
                   isDisabled={!draftId}
                 />
 
                 <div className="flex justify-between pt-6">
                   <Button
                     variant="outline"
-                    onClick={() => setCurrentStep(2)}
+                    onClick={() => setCurrentStep(3)}
                   >
                     Back
                   </Button>
                   <Button
-                    onClick={() => setCurrentStep(4)}
+                    onClick={() => setCurrentStep(5)}
                     disabled={!draftId}
                     className="flex items-center gap-2"
                   >
@@ -879,7 +1103,7 @@ export default function VisualToolBuilderPage() {
               </div>
             )}
 
-            {currentStep === 4 && (
+            {currentStep === 5 && (
               <div className="max-w-2xl mx-auto">
                 <div className="text-center mb-8">
                   <h2 className="text-2xl font-bold mb-2">Publish Your Tool</h2>
@@ -928,7 +1152,7 @@ export default function VisualToolBuilderPage() {
                 <div className="flex justify-between pt-6">
                   <Button
                     variant="outline"
-                    onClick={() => setCurrentStep(3)}
+                    onClick={() => setCurrentStep(4)}
                   >
                     Back
                   </Button>
@@ -955,6 +1179,48 @@ export default function VisualToolBuilderPage() {
           fxnId={draftId}
         />
       )}
+      
+      {/* Delete Draft Confirmation Dialog */}
+      <AlertDialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete Draft?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to delete this draft? This action cannot be undone and all your work will be permanently lost.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={confirmDeleteDraft}
+              className="bg-red-600 hover:bg-red-700"
+            >
+              Delete Draft
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Discard Changes Confirmation Dialog */}
+      <AlertDialog open={showDiscardDialog} onOpenChange={setShowDiscardDialog}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Discard Unsaved Changes?</AlertDialogTitle>
+            <AlertDialogDescription>
+              You have unsaved changes. If you leave now, your changes will be lost. Are you sure you want to continue?
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Stay & Save</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={confirmDiscardChanges}
+              className="bg-red-600 hover:bg-red-700"
+            >
+              Discard Changes
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </>
   );
 }

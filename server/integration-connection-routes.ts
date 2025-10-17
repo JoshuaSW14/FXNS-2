@@ -44,12 +44,56 @@ function sendCloseHtml(
 (function () {
   var payload = { type:"oauth_done", provider:${JSON.stringify(provider)}, ok:${ok}, msg:${JSON.stringify(msg || "")} };
   var parentOrigin = ${JSON.stringify(parentOrigin)};
-  var tries = 0, iv = setInterval(function(){
-    tries++; try { if (window.opener) window.opener.postMessage(payload, parentOrigin); } catch(e){}
-    if (tries >= 8) clearInterval(iv);
-  }, 120);
+  var success = false;
+  
+  // Method 1: BroadcastChannel API (most reliable, works across tabs)
+  try {
+    if (typeof BroadcastChannel !== 'undefined') {
+      var bc = new BroadcastChannel('fxns_oauth');
+      bc.postMessage(payload);
+      bc.close();
+      success = true;
+      console.log('[OAuth] BroadcastChannel message sent');
+    }
+  } catch(e) { console.log('[OAuth] BroadcastChannel failed:', e); }
+  
+  // Method 2: localStorage event (works when BroadcastChannel unavailable)
+  try {
+    var storageKey = 'fxns_oauth_' + Date.now();
+    localStorage.setItem(storageKey, JSON.stringify(payload));
+    // Clean up after 5 seconds
+    setTimeout(function() {
+      try { localStorage.removeItem(storageKey); } catch(e) {}
+    }, 5000);
+    success = true;
+    console.log('[OAuth] localStorage event dispatched');
+  } catch(e) { console.log('[OAuth] localStorage failed:', e); }
+  
+  // Method 3: postMessage with enhanced retry (works for same-origin popups)
+  var tries = 0, maxTries = 12; // Increased from 8 to 12
+  var iv = setInterval(function(){
+    tries++;
+    try { 
+      if (window.opener && !window.opener.closed) {
+        window.opener.postMessage(payload, parentOrigin);
+        if (tries === 1) console.log('[OAuth] postMessage attempt started');
+      }
+    } catch(e){ if (tries === 1) console.log('[OAuth] postMessage failed:', e); }
+    if (tries >= maxTries) {
+      clearInterval(iv);
+      console.log('[OAuth] postMessage attempts completed');
+    }
+  }, 150); // Increased interval from 120ms to 150ms for better reliability
+  
+  // Method 4: URL redirect fallback (final resort)
   var url = parentOrigin + "/integrations?${qs}#fxns_oauth=done";
-  setTimeout(function(){ try{ location.replace(url); }catch(e){} setTimeout(function(){ try{ window.close(); }catch(e){} }, 200); }, 250);
+  setTimeout(function(){
+    if (!success) console.log('[OAuth] Falling back to redirect');
+    try { location.replace(url); } catch(e) {}
+    setTimeout(function(){ 
+      try { window.close(); } catch(e) {}
+    }, 200);
+  }, success ? 500 : 250); // Give more time if other methods succeeded
 })();
 </script>`);
 }

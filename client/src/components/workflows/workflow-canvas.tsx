@@ -1,4 +1,4 @@
-import { useCallback, useState, DragEvent, useMemo, useEffect } from "react";
+import { useCallback, useState, DragEvent, useMemo, useEffect, useRef } from "react";
 import ReactFlow, {
   Node,
   Edge,
@@ -27,6 +27,7 @@ import {
   Globe,
   Sparkles,
   RefreshCw,
+  Wrench,
 } from "lucide-react";
 import TriggerNode from "./nodes/TriggerNode";
 import ActionNode from "./nodes/ActionNode";
@@ -35,6 +36,7 @@ import TransformNode from "./nodes/TransformNode";
 import ApiNode from "./nodes/ApiNode";
 import AiNode from "./nodes/AiNode";
 import LoopNode from "./nodes/LoopNode";
+import ToolNode from "./nodes/ToolNode";
 import NodeConfigPanel from "./node-config-panel";
 
 interface WorkflowCanvasProps {
@@ -46,6 +48,8 @@ interface WorkflowCanvasProps {
   onCanvasReady?: (api: {
     addGeneratedNodes: (nodes: Node[], edges: Edge[]) => void;
   }) => void;
+  onNodesChange?: (nodes: Node[]) => void;
+  onEdgesChange?: (edges: Edge[]) => void;
 }
 
 const nodeTypes: NodeTypes = {
@@ -56,6 +60,7 @@ const nodeTypes: NodeTypes = {
   api: ApiNode,
   ai: AiNode,
   loop: LoopNode,
+  tool: ToolNode,
 };
 
 const nodePalette = [
@@ -108,6 +113,13 @@ const nodePalette = [
     color: "text-orange-600",
     bgColor: "bg-orange-500/10",
   },
+  {
+    type: "tool",
+    label: "Tool",
+    icon: Wrench,
+    color: "text-teal-600",
+    bgColor: "bg-teal-500/10",
+  },
 ];
 
 export default function WorkflowCanvas({
@@ -117,11 +129,47 @@ export default function WorkflowCanvas({
   onRun,
   onSettings,
   onCanvasReady,
+  onNodesChange: onNodesChangeProp,
+  onEdgesChange: onEdgesChangeProp,
 }: WorkflowCanvasProps) {
   const [nodes, setNodes, onNodesChange] = useNodesState(initialNodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(initialEdges);
   const [reactFlowInstance, setReactFlowInstance] = useState<any>(null);
   const [selectedNode, setSelectedNode] = useState<Node | null>(null);
+  const configPanelRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (onNodesChangeProp) {
+      onNodesChangeProp(nodes);
+    }
+  }, [nodes, onNodesChangeProp]);
+
+  useEffect(() => {
+    if (onEdgesChangeProp) {
+      onEdgesChangeProp(edges);
+    }
+  }, [edges, onEdgesChangeProp]);
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (
+        selectedNode &&
+        configPanelRef.current &&
+        !configPanelRef.current.contains(event.target as Node)
+      ) {
+        const target = event.target as HTMLElement;
+        const isNodeClick = target.closest('.react-flow__node');
+        if (!isNodeClick) {
+          setSelectedNode(null);
+        }
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+    };
+  }, [selectedNode]);
 
   const addGeneratedNodes = useCallback(
     (newNodes: Node[], newEdges: Edge[]) => {
@@ -173,10 +221,29 @@ export default function WorkflowCanvas({
     (event: React.DragEvent) => {
       event.preventDefault();
       const data = event.dataTransfer.getData("application/reactflow");
-      if (!data) return;
+      if (!data) {
+        console.warn("WorkflowCanvas: No drag data found");
+        return;
+      }
 
-      const { type, label } = JSON.parse(data);
-      if (!type || !reactFlowInstance) return;
+      let parsedData;
+      try {
+        parsedData = JSON.parse(data);
+      } catch (e) {
+        console.error("WorkflowCanvas: Failed to parse drag data", e);
+        return;
+      }
+
+      const { type, label } = parsedData;
+      if (!type) {
+        console.warn("WorkflowCanvas: Missing node type");
+        return;
+      }
+      
+      if (!reactFlowInstance) {
+        console.warn("WorkflowCanvas: ReactFlow instance not ready");
+        return;
+      }
 
       const position = reactFlowInstance.screenToFlowPosition({
         x: event.clientX,
@@ -189,16 +256,16 @@ export default function WorkflowCanvas({
         position,
         data: { label },
       };
-      setNodes((nds) => nds.concat(newNode));
+      
+      console.log("WorkflowCanvas: Adding new node", newNode);
+      setNodes((nds) => {
+        const updated = nds.concat(newNode);
+        console.log("WorkflowCanvas: Total nodes after add:", updated.length);
+        return updated;
+      });
     },
     [reactFlowInstance, setNodes]
   );
-
-  const onDragStart = (event: DragEvent, nodeType: string, label: string) => {
-    event.dataTransfer.setData("application/reactflow", nodeType);
-    event.dataTransfer.setData("label", label);
-    event.dataTransfer.effectAllowed = "move";
-  };
 
   const handleSave = () => {
     if (onSave) {
@@ -287,7 +354,10 @@ export default function WorkflowCanvas({
 
       {/* 3) Floating CONFIG PANEL — overlay, not pushing layout */}
       {selectedNode && (
-        <div className="absolute inset-y-0 right-0 z-50 pointer-events-none">
+        <div 
+          ref={configPanelRef}
+          className="absolute inset-y-0 right-0 z-50 pointer-events-none"
+        >
           <div className="pointer-events-auto w-[380px] max-w-[90vw] h-full">
             <div className="h-full overflow-auto">
               <NodeConfigPanel
@@ -301,8 +371,12 @@ export default function WorkflowCanvas({
         </div>
       )}
 
-      {/* 4) Floating toolbar (optional) */}
-      <div className="absolute top-4 right-4 z-40 flex gap-2">
+      {/* 4) Floating toolbar - moves left when config panel is open */}
+      <div 
+        className={`absolute top-4 z-40 flex gap-2 transition-all duration-200 ${
+          selectedNode ? 'right-[400px]' : 'right-4'
+        }`}
+      >
         <Button variant="outline" size="sm" onClick={handleSave}>
           <Save className="w-4 h-4 mr-2" />
           Save

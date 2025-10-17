@@ -69,6 +69,7 @@ import {
   Code,
   Sparkles,
   Settings,
+  Wrench,
 } from "lucide-react";
 import { Node } from "reactflow";
 import { useToast } from "@/hooks/use-toast";
@@ -353,6 +354,23 @@ const loopConfigSchema = z.object({
 });
 
 type LoopConfigFormData = z.infer<typeof loopConfigSchema>;
+
+const toolConfigSchema = z.object({
+  toolId: z.string().optional(),
+  inputMappings: z.array(z.object({
+    fieldId: z.string(),
+    value: z.union([
+      z.string(),
+      z.object({
+        fromNode: z.string(),
+        fieldName: z.string(),
+      }),
+    ]),
+  })).default([]),
+  description: z.string().optional(),
+});
+
+type ToolConfigFormData = z.infer<typeof toolConfigSchema>;
 
 const OPERATORS_BY_TYPE = {
   number: [
@@ -663,6 +681,20 @@ export default function NodeConfigPanel({
     },
   });
 
+  const toolForm = useForm<ToolConfigFormData>({
+    resolver: zodResolver(toolConfigSchema),
+    defaultValues: {
+      toolId: selectedNode?.data?.toolId || "",
+      inputMappings: selectedNode?.data?.inputMappings || [],
+      description: selectedNode?.data?.description || "",
+    },
+  });
+
+  const { data: userTools } = useQuery<{ tools: any[] }>({
+    queryKey: ["/api/tools/me"],
+    enabled: selectedNode?.type === "tool",
+  });
+
   const watchTransformType = transformForm.watch("transformType");
   const watchTemplateMode = transformForm.watch("templateMode");
   const watchFieldMappings = transformForm.watch("fieldMappings");
@@ -758,6 +790,15 @@ export default function NodeConfigPanel({
     return () => subscription.unsubscribe();
   }, [selectedNode]);
 
+  useEffect(() => {
+    const subscription = toolForm.watch((value) => {
+      if (selectedNode && selectedNode.type === "tool") {
+        handleToolConfigChange(value as ToolConfigFormData);
+      }
+    });
+    return () => subscription.unsubscribe();
+  }, [selectedNode, userTools]);
+
   if (!selectedNode) return null;
 
   function generateSecret(): string {
@@ -839,6 +880,18 @@ export default function NodeConfigPanel({
         ...selectedNode.data.config,
         ...config,
       },
+    });
+  };
+
+  const handleToolConfigChange = (config: Partial<ToolConfigFormData>) => {
+    const selectedTool = userTools?.tools.find(t => t.id === config.toolId);
+    onUpdate(selectedNode.id, {
+      ...selectedNode.data,
+      toolId: config.toolId,
+      toolName: selectedTool?.title,
+      toolCategory: selectedTool?.category,
+      inputMappings: config.inputMappings || [],
+      description: config.description,
     });
   };
 
@@ -1091,15 +1144,27 @@ export default function NodeConfigPanel({
                 </SelectContent>
               </Select>
             ) : (
-              <div className="text-sm text-muted-foreground p-3 bg-muted rounded-md">
-                No integrations connected yet. Visit the{" "}
-                <a
-                  href="/integrations"
-                  className="text-primary hover:underline"
+              <div className="space-y-2">
+                <div className="flex items-start gap-2 p-3 bg-amber-500/10 border border-amber-200 rounded-md">
+                  <AlertCircle className="h-4 w-4 text-amber-600 mt-0.5 flex-shrink-0" />
+                  <div className="text-sm space-y-1">
+                    <p className="font-medium text-amber-900 dark:text-amber-100">
+                      Integration Required
+                    </p>
+                    <p className="text-amber-800 dark:text-amber-200">
+                      This node requires an integration to function properly. Connect your account to get started.
+                    </p>
+                  </div>
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="w-full"
+                  onClick={() => window.open('/integrations', '_blank')}
                 >
-                  Integrations page
-                </a>{" "}
-                to connect your accounts.
+                  <Plug className="h-4 w-4 mr-2" />
+                  Connect Integration
+                </Button>
               </div>
             )}
             {selectedNode.data.integrationId && (
@@ -4253,6 +4318,127 @@ export default function NodeConfigPanel({
                     5-600 seconds (loops may take longer)
                   </p>
                 </div>
+              </div>
+            </div>
+          </>
+        )}
+
+        {selectedNode.type === "tool" && (
+          <>
+            <Separator className="my-4" />
+
+            <div className="space-y-4">
+              <div className="space-y-2">
+                <Label htmlFor="tool-select">Select Tool</Label>
+                <Select
+                  value={toolForm.watch("toolId")}
+                  onValueChange={(value) => {
+                    toolForm.setValue("toolId", value);
+                    const selectedTool = userTools?.tools.find(t => t.id === value);
+                    if (selectedTool && selectedTool.inputSchema) {
+                      const fields = Object.keys(selectedTool.inputSchema as any);
+                      const mappings = fields.map(fieldId => ({
+                        fieldId,
+                        value: "",
+                      }));
+                      toolForm.setValue("inputMappings", mappings);
+                    }
+                  }}
+                >
+                  <SelectTrigger id="tool-select">
+                    <SelectValue placeholder="Choose a tool to execute" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {userTools?.tools.map((tool) => (
+                      <SelectItem key={tool.id} value={tool.id}>
+                        <div className="flex items-center gap-2">
+                          <Wrench className="h-4 w-4" />
+                          <div>
+                            <div className="font-medium">{tool.title}</div>
+                            <div className="text-xs text-muted-foreground">
+                              {tool.category}
+                            </div>
+                          </div>
+                        </div>
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground">
+                  Select a tool from your created tools
+                </p>
+              </div>
+
+              {toolForm.watch("toolId") && (() => {
+                const selectedTool = userTools?.tools.find(
+                  t => t.id === toolForm.watch("toolId")
+                );
+                const inputSchema = selectedTool?.inputSchema as any;
+                const inputMappings = toolForm.watch("inputMappings");
+
+                return (
+                  <>
+                    <Separator className="my-4" />
+                    
+                    <div className="space-y-4 p-4 bg-muted/50 rounded-lg">
+                      <h4 className="text-sm font-medium flex items-center gap-2">
+                        <Settings className="h-4 w-4" />
+                        Input Field Mapping
+                      </h4>
+
+                      {inputSchema && Object.entries(inputSchema).map(([fieldId, spec]: [string, any], idx) => (
+                        <div key={fieldId} className="space-y-2">
+                          <Label htmlFor={`tool-input-${fieldId}`}>
+                            {spec.label || fieldId}
+                            {spec.required && <span className="text-red-500 ml-1">*</span>}
+                          </Label>
+                          <Input
+                            id={`tool-input-${fieldId}`}
+                            placeholder={`Enter value or use {{step.nodeId.field}}`}
+                            value={(inputMappings[idx]?.value as string) || ""}
+                            onChange={(e) => {
+                              const newMappings = [...inputMappings];
+                              newMappings[idx] = {
+                                ...newMappings[idx],
+                                fieldId,
+                                value: e.target.value,
+                              };
+                              toolForm.setValue("inputMappings", newMappings);
+                            }}
+                            className="font-mono text-sm"
+                          />
+                          <p className="text-xs text-muted-foreground">
+                            Type: {spec.type} {spec.description && `- ${spec.description}`}
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+
+                    <div className="space-y-2 p-4 bg-blue-50 dark:bg-blue-950 rounded-lg">
+                      <h4 className="text-sm font-medium flex items-center gap-2">
+                        <Info className="h-4 w-4" />
+                        Tool Information
+                      </h4>
+                      <div className="text-sm space-y-1">
+                        <p><strong>Name:</strong> {selectedTool?.title}</p>
+                        <p><strong>Category:</strong> {selectedTool?.category}</p>
+                        <p><strong>Description:</strong> {selectedTool?.description}</p>
+                      </div>
+                    </div>
+                  </>
+                );
+              })()}
+
+              <Separator className="my-4" />
+
+              <div className="space-y-2">
+                <Label htmlFor="tool-description">Description</Label>
+                <Textarea
+                  id="tool-description"
+                  {...toolForm.register("description")}
+                  placeholder="Describe what this tool node does..."
+                  rows={3}
+                />
               </div>
             </div>
           </>

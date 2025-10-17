@@ -1,0 +1,15 @@
+I need to extend the tool builder so that logic flows can branch based on conditional outcomes instead of always running in a straight line. Right now, the LogicFlowBuilder component (see client/src/components/tool-builder/logic-flow-builder.tsx) shows “If/Then” and “Switch/Case” step types, but the code does not support adding child steps for the “then”, “else”, or “case” branches. There’s even a comment in ConditionConfig (“Then/Else logic will be expanded in future versions”) showing this missing feature.
+
+Please implement branching logic support so a user can, for example, evaluate an input field and then run different calculations depending on the result. Here are some requirements:
+
+Data model: Extend the LogicStep type (in @shared/tool-builder-schemas) so that a condition step can hold then: LogicStep[] and else: LogicStep[] arrays. Similarly, a switch step should hold cases: Record<string, LogicStep[]> and an optional default: LogicStep[].
+
+UI – list view: In logic-flow-builder.tsx, update the condition and switch step cards so the user can add nested steps under each branch. Each branch should visually indent its children underneath the parent step. Users should be able to click “Add Step” within a branch and choose a step type (calculation, transform, etc.).
+
+UI – visual flowchart: In visual-flowchart-designer.tsx, update the React Flow configuration so that when a condition or switch node has multiple branches, it draws separate edges to child nodes instead of a single downward arrow. The mini‑map in the bottom‑right corner should reflect these branches.
+
+Configuration panels: Modify ConditionConfig and any new SwitchConfig component so that users can specify the field/operator/value for each branch and dynamically add/remove else if or case branches.
+
+Execution engine: Ensure that the underlying logic runner (server‑side in server/tool-builder-service.ts) properly executes nested steps: it should evaluate the condition or switch, then call a function to recursively execute the chosen branch’s array of steps.
+
+When finished, the tool builder should allow nested, branched workflows both in list view and visual flow. Also ensure that existing tests still pass and add any new tests needed for the branching behavior.

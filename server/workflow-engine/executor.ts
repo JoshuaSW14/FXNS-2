@@ -23,6 +23,7 @@ import { TransformRunner } from './runners/transform-runner.js';
 import { ApiRunner } from './runners/api-runner.js';
 import { AiRunner } from './runners/ai-runner.js';
 import { LoopRunner } from './runners/loop-runner.js';
+import { ToolRunner } from './runners/tool-runner.js';
 
 export class WorkflowExecutor {
   private runners = new Map<string, any>();
@@ -35,6 +36,7 @@ export class WorkflowExecutor {
     this.runners.set('api', new ApiRunner());
     this.runners.set('ai', new AiRunner());
     this.runners.set('loop', new LoopRunner());
+    this.runners.set('tool', new ToolRunner());
   }
 
   async executeWorkflow(

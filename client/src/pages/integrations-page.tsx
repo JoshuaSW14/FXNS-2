@@ -194,8 +194,48 @@ export default function IntegrationsPage() {
         resolve(payload);
       };
 
+      // Method 1: BroadcastChannel listener (most reliable)
+      let bc: BroadcastChannel | null = null;
+      const onBroadcast = (ev: MessageEvent) => {
+        console.log("[OAuth] Received BroadcastChannel message", ev.data);
+        const d = ev.data || {};
+        if (d.type !== "oauth_done") return;
+        if (d.provider && d.provider !== provider) return;
+        if (flowId !== currentFlowId.current) return;
+        finish({ status: d.ok ? "success" : "error", message: d.msg });
+      };
+      
+      try {
+        if (typeof BroadcastChannel !== 'undefined') {
+          bc = new BroadcastChannel('fxns_oauth');
+          bc.addEventListener('message', onBroadcast);
+          console.log("[OAuth] BroadcastChannel listener ready");
+        }
+      } catch (e) {
+        console.log("[OAuth] BroadcastChannel not available:", e);
+      }
+
+      // Method 2: localStorage event listener (fallback)
+      const onStorage = (ev: StorageEvent) => {
+        if (!ev.key || !ev.key.startsWith('fxns_oauth_')) return;
+        if (!ev.newValue) return;
+        
+        try {
+          const d = JSON.parse(ev.newValue);
+          console.log("[OAuth] Received localStorage event", d);
+          if (d.type !== "oauth_done") return;
+          if (d.provider && d.provider !== provider) return;
+          if (flowId !== currentFlowId.current) return;
+          finish({ status: d.ok ? "success" : "error", message: d.msg });
+        } catch (e) {
+          console.log("[OAuth] Failed to parse localStorage data:", e);
+        }
+      };
+      window.addEventListener("storage", onStorage);
+
+      // Method 3: postMessage listener (traditional fallback)
       const onMsg = (ev: MessageEvent) => {
-        console.log("Received postMessage", ev);
+        console.log("[OAuth] Received postMessage", ev);
         if (!ALLOWED_MESSAGE_ORIGINS.has(ev.origin)) return;
         const d = ev.data || {};
         if (d.type !== "oauth_done") return;
@@ -248,9 +288,18 @@ export default function IntegrationsPage() {
       }, TICK);
 
       function cleanup() {
+        // Clean up all listeners
+        if (bc) {
+          try {
+            bc.removeEventListener('message', onBroadcast);
+            bc.close();
+          } catch (e) {}
+        }
+        window.removeEventListener("storage", onStorage);
         window.removeEventListener("message", onMsg);
         window.clearInterval(timer);
         if (currentCleanup.current === cleanup) currentCleanup.current = null;
+        console.log("[OAuth] Cleanup completed");
       }
 
       // register cleanup so a new flow can cancel this one

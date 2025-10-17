@@ -1,0 +1,80 @@
+Understood. I'll perform QA testing on your FXNS website, focusing specifically on the creation, usage, and editing of the "Tools" and "Workflows" features. I'll provide you with a detailed report on the overall functionality, expectations, what works well, and what needs improvement without introducing new features. I'll start the testing now.
+
+
+Below is a comprehensive QA report for the **FXNS** website, focusing on the two main features: **Tools** and **Workflows**. I tested the creation, editing and basic usage of these features through the dashboard and builder interfaces.
+
+### General observations
+
+* The site loads quickly and the left‑hand navigation makes it easy to access the Dashboard, Explore, Tools and Workflows areas.
+* Users are automatically logged in as a “Test User”; there were no authentication prompts.
+* The Dashboard displays high‑level metrics (runs, favorites, plan status) and tabs for Overview, Analytics, My Tools and Drafts. “Drafts” lists unpublished tools with an **Edit** and **Test** button.
+
+## Tools feature
+
+### Expected behaviour
+
+Users should be able to:
+
+1. Provide basic information (name, description, category, tags) for a new tool.
+2. Design an input form by dragging or adding fields.
+3. Define a logic flow (calculations, conditions, API calls).
+4. Test and preview the tool.
+5. Publish the tool and see it in the “Tools” list and Dashboard “My Tools” tab.
+
+### What’s working
+
+* **Visual Tool Builder**: The multi‑step builder (Tool Info → Input Form → Logic Flow → Test & Preview → Publish) appears as expected. The progress bar gives clear feedback.
+* **Input Form**: Clicking a field type adds it to the form area. Field properties can be edited (labels, placeholders, requirement status, etc.).
+* **Logic Flow**: It’s possible to add a **Calculate** step. The configuration panel allows insertion of variables and formulas (e.g., `number_1 + number_2`).
+* **Test & Preview**: A draft tool can be tested without publishing. Running a test shows the input context and result JSON. In my test, adding 3 and 5 returned a correct result of 8.
+* **Draft management**: Unpublished tools are saved automatically as drafts and listed under Dashboard → Drafts. Draft cards display progress, updated date and provide **Edit** and **Delete** options.
+
+### Issues discovered
+
+1. **Add Tag button unresponsive** – Clicking **Add Tag** in the Tool Info step does not create a tag input; there is no error feedback.
+2. **Drag‑and‑drop vs. click** – Although the form builder advertises drag‑and‑drop, dragging fields doesn’t work; clicking is the only way to add fields.
+3. **Placeholders in test output** – The Test & Preview page still shows the template placeholder `{{result}}` in the response section instead of a formatted result.
+4. **Tool not visible in Tools list** – Draft tools do not appear under the “Tools” page or Dashboard “My Tools” tab. Only published tools likely appear there, so users might think their work vanished.
+5. **Draft “Test” button inactive** – In the Dashboard’s Drafts list, clicking **Test** does nothing. The only way to test a draft is by re‑entering the builder.
+6. **Editing drafts resets fields** – Re‑entering a draft sometimes resets the Tool Info step (name and description fields empty) even though progress shows 20–50%.
+
+## Workflows feature
+
+### Expected behaviour
+
+Workflows should let users assemble automation flows using nodes such as **Trigger**, **Action**, **Condition**, **Transform**, **API Call**, **AI Task** and **Loop**. Users should be able to drag nodes onto a canvas, configure them, connect them via edges and run/debug the workflow.
+
+### What’s working
+
+* **Creation**: Clicking **Create Workflow** opens a canvas with a node palette, settings menu, debug and analytics options.
+
+* **Trigger node**: Dragging a Trigger from the palette onto the canvas adds a node. Double‑clicking it opens a configuration panel where the label, trigger type (manual vs. other) and timeout settings can be modified. The node has a green output port.
+
+* **Workflows list**: Created workflows appear on the Workflows page with status, last updated date and a three‑dot menu offering **Edit** and **Delete**.
+
+### Issues discovered
+
+1. **Nodes count remains 0** – Even after adding a Trigger, the workflow summary still says “0 nodes”, suggesting the node isn’t registered.
+2. **Can’t add other nodes** – Dragging **Action**, **Condition**, **Transform**, **API Call**, **AI Task** or **Loop** onto the canvas doesn’t place any node. Clicking or double‑clicking also doesn’t work. Thus, only a Trigger can be added.
+3. **Connections not possible** – Since no other nodes can be placed, it’s impossible to connect nodes. Dragging from the Trigger’s output port doesn’t create an edge or open a node selection menu.
+4. **Node configuration panel not closable** – The panel that opens when editing a node has a close (×) icon, but clicking it does nothing. The panel stays fixed on the right side and cannot be collapsed.
+5. **Integration requirement** – The Trigger’s configuration warns that no integrations are connected and links to an Integrations page (not accessible from the builder). Without integrations, triggers and actions may not function.
+6. **Save/Run inaccessible** – The Save and Run controls are partially hidden by the configuration panel, making it unclear whether the workflow can be saved or tested.
+
+### Other notes
+
+* There is a **Tip Calculator** draft pre‑loaded in the system; it can be edited using the same builder but exhibits the same issues with test/publish.
+* The **Explore Tools** page shows 0 available tools, meaning there is currently no public library.
+* The **Dashboard** indicates an average rating of 4.5 but with zero runs or favorites, which is inconsistent.
+
+## Recommendations
+
+* **Fix field interactions**: Enable drag‑and‑drop functionality for the form builder and Node palette. Make sure the **Add Tag** button works.
+* **Persist draft data**: When returning to edit a draft, the Tool Info fields should retain the previously entered name and description.
+* **Enable Draft testing**: Make the **Test** button on the Drafts list functional so users can run quick tests without re‑entering the builder.
+* **Improve test output**: Replace the placeholder `{{result}}` with an actual result preview so users see what end‑users will see.
+* **Workflow builder stability**: Allow adding all node types from the palette and connecting them. Update the nodes count indicator to reflect the actual number of nodes. Provide a way to close the node configuration panel.
+* **Integrations**: Provide an easy path to set up integrations from within the Workflow builder (e.g., linking to App Integrations).
+* **Clarify saving vs. publishing**: Make it clear that unpublished tools appear under Drafts only and cannot be used by others until published.
+
+Overall, the **Tools** feature largely works for creating simple tools and testing them in preview mode, but there are usability bugs around tags, drafts and output rendering. The **Workflows** feature is currently incomplete; only a Trigger node can be added and the inability to add other nodes or run workflows makes it unsuitable for production.

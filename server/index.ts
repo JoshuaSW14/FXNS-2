@@ -25,6 +25,11 @@ const app = express();
 
 app.set("trust proxy", 1);
 
+// Health check endpoint - before any middleware
+app.get("/health", (req, res) => {
+  res.json({ status: "ok" });
+});
+
 // Redirect from fxns.ca to www.fxns.ca in production
 app.use((req, res, next) => {
   if (process.env.NODE_ENV === "production") {
@@ -168,15 +173,14 @@ app.use((req, res, next) => {
     serveStatic(app);
   }
 
-  // ALWAYS serve the app on the port specified in the environment variable PORT
-  // Other ports are firewalled. Default to 5000 if not specified.
-  // this serves both the API and the client.
-  // It is the only port that is not firewalled.
-  const listenPort = process.env.PORT ? Number(process.env.PORT) : 5001; //TODO: Confirm port 5001 (could be 5000)
-  server.listen(listenPort, () => {
+  // Backend server always listens on localhost:5001 in development
+  // In production, it serves both API and static files on the configured port
+  const listenPort = process.env.PORT ? Number(process.env.PORT) : 5001;
+  const listenHost = app.get("env") === "development" ? "localhost" : "0.0.0.0";
+  server.listen(listenPort, listenHost, () => {
     const mode = app.get("env");
     log(`running in mode: ${mode}`);
-    log(`serving on port ${listenPort}`);
+    log(`serving on ${listenHost}:${listenPort}`);
   });
 
   // Graceful shutdown handling

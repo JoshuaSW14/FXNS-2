@@ -1,9 +1,10 @@
-import { useState } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 import { useParams, useLocation } from "wouter";
 import {
   useWorkflow,
   useUpdateWorkflow,
   useExecuteWorkflow,
+  useDeleteWorkflow,
 } from "@/hooks/use-workflows";
 import NavigationHeader from "@/components/navigation-header";
 import WorkflowCanvas from "@/components/workflows/workflow-canvas";
@@ -14,6 +15,16 @@ import { PublishWorkflowModal } from "@/components/workflows/publish-workflow-mo
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { useToast } from "@/hooks/use-toast";
 import {
   ArrowLeft,
@@ -24,11 +35,15 @@ import {
   BarChart3,
   Upload,
   Bug,
+  Loader2,
+  CheckCircle,
+  AlertTriangle,
+  Trash2,
+  Save,
 } from "lucide-react";
 import { Node, Edge } from "reactflow";
 import { useAuth } from "@/hooks/use-auth";
-import { useEffect, useRef } from "react";
-import { useSidebar } from "@/components/ui/sidebar"; // <-- from your sidebar.tsx
+import { useSidebar } from "@/components/ui/sidebar";
 
 export default function WorkflowEditorPage() {
   const params = useParams<{ id: string }>();
@@ -38,13 +53,26 @@ export default function WorkflowEditorPage() {
   const { data: workflow, isLoading } = useWorkflow(params.id!);
   const updateWorkflow = useUpdateWorkflow();
   const executeWorkflow = useExecuteWorkflow();
+  const deleteWorkflow = useDeleteWorkflow();
+  
   const [aiAssistantOpen, setAiAssistantOpen] = useState(false);
   const [debugPanelOpen, setDebugPanelOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [publishModalOpen, setPublishModalOpen] = useState(false);
+  const [currentNodes, setCurrentNodes] = useState<Node[]>([]);
+  const [currentEdges, setCurrentEdges] = useState<Edge[]>([]);
   const [canvasRef, setCanvasRef] = useState<{
     addGeneratedNodes: (nodes: Node[], edges: Edge[]) => void;
   } | null>(null);
+  
+  // Auto-save and confirmation dialogs
+  const [autoSaveStatus, setAutoSaveStatus] = useState<'saved' | 'saving' | 'error' | null>(null);
+  const [showDeleteDialog, setShowDeleteDialog] = useState(false);
+  const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
+  const autoSaveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const lastSavedNodesRef = useRef<Node[]>([]);
+  const lastSavedEdgesRef = useRef<Edge[]>([]);
+  
   const { open, openMobile, setOpen, setOpenMobile, isMobile } = useSidebar();
   const prevDesktopOpen = useRef(open);
   const prevMobileOpen = useRef(openMobile);
@@ -65,26 +93,88 @@ export default function WorkflowEditorPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); // <-- important: empty deps
 
-  const handleSave = async (nodes: Node[], edges: Edge[]) => {
+  // Auto-save function with debounce
+  const triggerAutoSave = useCallback((nodes: Node[], edges: Edge[]) => {
+    if (autoSaveTimeoutRef.current) {
+      clearTimeout(autoSaveTimeoutRef.current);
+    }
+    
+    setAutoSaveStatus('saving');
+    setHasUnsavedChanges(true);
+    
+    autoSaveTimeoutRef.current = setTimeout(async () => {
+      if (!workflow) return;
+      
+      try {
+        await updateWorkflow.mutateAsync({
+          id: workflow.id,
+          nodes,
+          edges,
+        });
+        
+        lastSavedNodesRef.current = nodes;
+        lastSavedEdgesRef.current = edges;
+        setHasUnsavedChanges(false);
+        setAutoSaveStatus('saved');
+        
+        // Reset auto-save status after 3 seconds
+        setTimeout(() => {
+          setAutoSaveStatus(null);
+        }, 3000);
+      } catch (error) {
+        setAutoSaveStatus('error');
+        console.error('Auto-save failed:', error);
+        
+        // Reset error status after 5 seconds
+        setTimeout(() => {
+          setAutoSaveStatus(null);
+        }, 5000);
+      }
+    }, 2000); // Auto-save after 2 seconds of inactivity
+  }, [workflow, updateWorkflow]);
+
+  const handleSave = async (nodes: Node[], edges: Edge[], showToast = true) => {
     if (!workflow) return;
 
     try {
+      setCurrentNodes(nodes);
+      setCurrentEdges(edges);
+      setAutoSaveStatus('saving');
+      
       await updateWorkflow.mutateAsync({
         id: workflow.id,
         nodes,
         edges,
       });
 
+      lastSavedNodesRef.current = nodes;
+      lastSavedEdgesRef.current = edges;
+      setHasUnsavedChanges(false);
+      setAutoSaveStatus('saved');
+
+      if (showToast) {
+        toast({
+          title: "Workflow saved",
+          description: "Your workflow has been saved successfully",
+        });
+      }
+      
+      // Reset auto-save status after 3 seconds
+      setTimeout(() => {
+        setAutoSaveStatus(null);
+      }, 3000);
+    } catch (error: any) {
+      setAutoSaveStatus('error');
       toast({
-        title: "Workflow saved",
-        description: "Your workflow has been saved successfully",
-      });
-    } catch (error) {
-      toast({
-        title: "Error",
-        description: "Failed to save workflow",
+        title: "Save failed",
+        description: error.message || "Failed to save workflow",
         variant: "destructive",
       });
+      
+      // Reset error status after 5 seconds
+      setTimeout(() => {
+        setAutoSaveStatus(null);
+      }, 5000);
     }
   };
 
@@ -123,6 +213,56 @@ export default function WorkflowEditorPage() {
       });
     }
   };
+
+  const handleDeleteWorkflow = () => {
+    setShowDeleteDialog(true);
+  };
+
+  const confirmDeleteWorkflow = async () => {
+    if (!workflow) return;
+    
+    try {
+      await deleteWorkflow.mutateAsync(workflow.id);
+      toast({
+        title: "Workflow deleted",
+        description: "Your workflow has been permanently deleted.",
+      });
+      setLocation('/workflows');
+    } catch (error: any) {
+      toast({
+        title: "Delete failed",
+        description: error.message || "Failed to delete workflow",
+        variant: "destructive",
+      });
+    } finally {
+      setShowDeleteDialog(false);
+    }
+  };
+
+  // Prevent navigation with unsaved changes
+  useEffect(() => {
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (hasUnsavedChanges) {
+        e.preventDefault();
+        e.returnValue = '';
+      }
+    };
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, [hasUnsavedChanges]);
+
+  // Watch for node/edge changes to trigger auto-save
+  useEffect(() => {
+    if (workflow && (currentNodes.length > 0 || currentEdges.length > 0)) {
+      const nodesChanged = JSON.stringify(currentNodes) !== JSON.stringify(lastSavedNodesRef.current);
+      const edgesChanged = JSON.stringify(currentEdges) !== JSON.stringify(lastSavedEdgesRef.current);
+      
+      if (nodesChanged || edgesChanged) {
+        triggerAutoSave(currentNodes, currentEdges);
+      }
+    }
+  }, [currentNodes, currentEdges, workflow, triggerAutoSave]);
 
   const getStatusBadge = (isActive: boolean) => {
     return isActive ? (
@@ -208,9 +348,43 @@ export default function WorkflowEditorPage() {
               </div>
             </div>
             <div className="flex items-center gap-2">
+              {/* Auto-save status indicator */}
+              {autoSaveStatus && (
+                <div className={`flex items-center gap-2 text-xs sm:text-sm ${
+                  autoSaveStatus === 'saved' ? 'text-green-600' : 
+                  autoSaveStatus === 'saving' ? 'text-blue-600' : 
+                  'text-red-600'
+                }`}>
+                  {autoSaveStatus === 'saving' && <Loader2 className="w-4 h-4 animate-spin" />}
+                  {autoSaveStatus === 'saved' && <CheckCircle className="w-4 h-4" />}
+                  {autoSaveStatus === 'error' && <AlertTriangle className="w-4 h-4" />}
+                  <span className="hidden sm:inline">
+                    {autoSaveStatus === 'saved' ? 'All changes saved' : 
+                     autoSaveStatus === 'saving' ? 'Saving...' : 
+                     'Save failed'}
+                  </span>
+                </div>
+              )}
+              
               <div className="text-sm text-muted-foreground mr-2">
-                {workflow.nodes.length} nodes
+                {currentNodes.length || workflow.nodes.length} nodes
               </div>
+              
+              {/* Manual save button */}
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => handleSave(currentNodes, currentEdges)}
+                disabled={updateWorkflow.isPending}
+              >
+                {updateWorkflow.isPending ? (
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                ) : (
+                  <Save className="w-4 h-4 mr-2" />
+                )}
+                Save
+              </Button>
+              
               <Button
                 variant="outline"
                 size="sm"
@@ -245,15 +419,32 @@ export default function WorkflowEditorPage() {
                 Settings
               </Button>
               {user && workflow.userId === user.id && (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setPublishModalOpen(true)}
-                  className="bg-gradient-to-r from-green-500/10 to-blue-500/10 border-green-200 hover:from-green-500/20 hover:to-blue-500/20"
-                >
-                  <Upload className="w-4 h-4 mr-2" />
-                  Publish
-                </Button>
+                <>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setPublishModalOpen(true)}
+                    className="bg-gradient-to-r from-green-500/10 to-blue-500/10 border-green-200 hover:from-green-500/20 hover:to-blue-500/20"
+                  >
+                    <Upload className="w-4 h-4 mr-2" />
+                    Publish
+                  </Button>
+                  
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleDeleteWorkflow}
+                    disabled={deleteWorkflow.isPending}
+                    className="text-red-600 hover:text-red-700 hover:bg-red-50"
+                  >
+                    {deleteWorkflow.isPending ? (
+                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                    ) : (
+                      <Trash2 className="w-4 h-4 mr-2" />
+                    )}
+                    Delete
+                  </Button>
+                </>
               )}
               <Button
                 variant="outline"
@@ -268,11 +459,15 @@ export default function WorkflowEditorPage() {
                 size="sm"
                 onClick={handleRun}
                 disabled={
-                  executeWorkflow.isPending || workflow.nodes.length === 0
+                  executeWorkflow.isPending || (currentNodes.length === 0 && workflow.nodes.length === 0)
                 }
                 className="bg-gradient-to-r from-green-500 to-emerald-500 hover:from-green-600 hover:to-emerald-600"
               >
-                <Play className="w-4 h-4 mr-2" />
+                {executeWorkflow.isPending ? (
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                ) : (
+                  <Play className="w-4 h-4 mr-2" />
+                )}
                 {executeWorkflow.isPending ? "Running..." : "Run Workflow"}
               </Button>
             </div>
@@ -289,6 +484,8 @@ export default function WorkflowEditorPage() {
           onRun={handleRun}
           onSettings={handleSettings}
           onCanvasReady={setCanvasRef}
+          onNodesChange={setCurrentNodes}
+          onEdgesChange={setCurrentEdges}
         />
       </div>
 
@@ -323,6 +520,27 @@ export default function WorkflowEditorPage() {
         nodes={workflow.nodes}
         triggerType={workflow.triggerType}
       />
+
+      {/* Delete Workflow Confirmation Dialog */}
+      <AlertDialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete Workflow?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Are you sure you want to delete "{workflow.name}"? This action cannot be undone and all workflow data will be permanently lost.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={confirmDeleteWorkflow}
+              className="bg-red-600 hover:bg-red-700"
+            >
+              Delete Workflow
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

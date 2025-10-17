@@ -31,7 +31,7 @@ export async function setupVite(app: Express, server: Server) {
       ["/robots.txt", "/sitemap.xml", "/favicon.ico", "/og-image.jpg"],
       (req, res) => {
         res.sendFile(path.join(publicPath, req.path));
-      }
+      },
     );
   }
 
@@ -64,19 +64,19 @@ export async function setupVite(app: Express, server: Server) {
       let html = await fs.promises.readFile(tpl, "utf8");
       html = html.replace(
         `src="/src/main.tsx"`,
-        `src="/src/main.tsx?v=${nanoid()}"`
+        `src="/src/main.tsx?v=${nanoid()}"`,
       );
-      
+
       // Inject nonce into script tags if CSP nonce is available
       const nonce = (res.locals as any).cspNonce;
       if (nonce) {
         // Add nonce to the main script tag
         html = html.replace(
           '<script type="module" src="/src/main.tsx',
-          `<script type="module" nonce="${nonce}" src="/src/main.tsx`
+          `<script type="module" nonce="${nonce}" src="/src/main.tsx`,
         );
       }
-      
+
       const page = await vite.transformIndexHtml(req.originalUrl, html);
       res.type("html").status(200).end(page);
     } catch (e) {
@@ -95,7 +95,7 @@ export function serveStatic(app: Express) {
 
   if (!fs.existsSync(distPath)) {
     throw new Error(
-      `Could not find the build directory: ${distPath}. Did you run the client build?`
+      `Could not find the build directory: ${distPath}. Did you run the client build?`,
     );
   }
 
@@ -104,7 +104,7 @@ export function serveStatic(app: Express) {
       maxAge: "1y",
       setHeaders(
         res: { setHeader: (arg0: string, arg1: string) => void },
-        filePath: string
+        filePath: string,
       ) {
         if (filePath.endsWith(".html")) {
           res.setHeader("Cache-Control", "no-cache");
@@ -112,7 +112,7 @@ export function serveStatic(app: Express) {
           res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
         }
       },
-    })
+    }),
   );
 
   const seoFiles = ["robots.txt", "sitemap.xml", "favicon.ico", "og-image.jpg"];
@@ -126,36 +126,35 @@ export function serveStatic(app: Express) {
   app.get(/^\/(?!api(?:\/|$)).*/, (req, res) => {
     const indexPath = path.join(distPath, "index.html");
     let html = fs.readFileSync(indexPath, "utf-8");
-    
+
     // Inject nonce into script tags if CSP nonce is available
     const nonce = (res.locals as any).cspNonce;
     if (nonce) {
       // Add nonce to all script tags (Vite generates multiple scripts in production)
       html = html.replace(
         /<script(?![^>]*\snonce=)/g,
-        `<script nonce="${nonce}" `
+        `<script nonce="${nonce}" `,
       );
-      
+
       // Add nonce to style tags if any exist
-      html = html.replace(
-        /<style>/g,
-        `<style nonce="${nonce}">`
-      );
+      html = html.replace(/<style>/g, `<style nonce="${nonce}">`);
     }
-    
+
     // Add preload for main CSS to prevent FOUC
     // Find the stylesheet link and add a preload before it
-    const cssMatch = html.match(/<link rel="stylesheet"[^>]*href="([^"]+\.css)"/);
+    const cssMatch = html.match(
+      /<link rel="stylesheet"[^>]*href="([^"]+\.css)"/,
+    );
     if (cssMatch && cssMatch[1]) {
       const cssPath = cssMatch[1];
       const preloadTag = `<link rel="preload" href="${cssPath}" as="style">`;
       // Insert preload before the stylesheet link
       html = html.replace(
         /<link rel="stylesheet"/,
-        `${preloadTag}\n    <link rel="stylesheet"`
+        `${preloadTag}\n    <link rel="stylesheet"`,
       );
     }
-    
+
     res.type("html").send(html);
   });
 }

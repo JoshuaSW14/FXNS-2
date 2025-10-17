@@ -34,7 +34,7 @@ export interface FormField {
 // Visual Logic Building Blocks
 export interface LogicStep {
   id: string;
-  type: 'calculation' | 'condition' | 'transform' | 'lookup' | 'api_call' | 'ai_analysis' | 'custom';
+  type: 'calculation' | 'condition' | 'transform' | 'lookup' | 'api_call' | 'ai_analysis' | 'custom' | 'switch';
   title: string;
   config: {
     calculation?: {
@@ -44,7 +44,19 @@ export interface LogicStep {
     condition?: {
       if: { fieldId: string; operator: string; value: any };
       then: LogicStep[];
+      elseIf?: Array<{
+        condition: { fieldId: string; operator: string; value: any };
+        then: LogicStep[];
+      }>;
       else?: LogicStep[];
+    };
+    switch?: {
+      fieldId: string;
+      cases: Array<{
+        value: string;
+        then: LogicStep[];
+      }>;
+      default?: LogicStep[];
     };
     custom?: {
       code: string; // Custom JavaScript code
@@ -1008,11 +1020,105 @@ class ToolBuilderService {
                 throw new Error(`CONDITION_ERROR: Field "${condition.if.fieldId}" not found for condition evaluation.`);
               }
               
-              const conditionMet = this.evaluateCondition(fieldValue, condition.if.operator, condition.if.value);
+              let branchTaken = 'none';
+              let stepsToExecute: any[] | undefined;
               
-              const nextSteps = conditionMet ? condition.then : (condition.else || []);
-              // For now, just record the condition result
-              context[`step_${step.id}`] = conditionMet;
+              // Evaluate main IF condition
+              const mainConditionMet = this.evaluateCondition(fieldValue, condition.if.operator, condition.if.value);
+              
+              if (mainConditionMet) {
+                branchTaken = 'then';
+                stepsToExecute = condition.then;
+                context[`step_${step.id}`] = { branch: 'then', conditionMet: true };
+              } else {
+                // Check ELSE-IF conditions
+                let elseIfMatched = false;
+                if (condition.elseIf && condition.elseIf.length > 0) {
+                  for (let i = 0; i < condition.elseIf.length; i++) {
+                    const elseIfBranch = condition.elseIf[i];
+                    const elseIfFieldValue = context[elseIfBranch.condition.fieldId];
+                    
+                    if (elseIfFieldValue === undefined) {
+                      throw new Error(`CONDITION_ERROR: Field "${elseIfBranch.condition.fieldId}" not found for else-if condition evaluation.`);
+                    }
+                    
+                    const elseIfMet = this.evaluateCondition(
+                      elseIfFieldValue, 
+                      elseIfBranch.condition.operator, 
+                      elseIfBranch.condition.value
+                    );
+                    
+                    if (elseIfMet) {
+                      branchTaken = `elseif_${i}`;
+                      elseIfMatched = true;
+                      stepsToExecute = elseIfBranch.then;
+                      context[`step_${step.id}`] = { branch: `elseif_${i}`, conditionMet: true };
+                      break;
+                    }
+                  }
+                }
+                
+                // If no ELSE-IF matched, use ELSE
+                if (!elseIfMatched) {
+                  branchTaken = 'else';
+                  stepsToExecute = condition.else;
+                  context[`step_${step.id}`] = { branch: 'else', conditionMet: false };
+                }
+              }
+              
+              // Execute nested steps for the taken branch
+              if (stepsToExecute && stepsToExecute.length > 0) {
+                await this.executeNestedSteps(stepsToExecute, context, inputConfig);
+              }
+            }
+            break;
+
+          case 'switch':
+            const switchConfig = step.config.switch;
+            if (switchConfig) {
+              const switchFieldValue = context[switchConfig.fieldId];
+              
+              if (switchFieldValue === undefined) {
+                throw new Error(`SWITCH_ERROR: Field "${switchConfig.fieldId}" not found for switch evaluation.`);
+              }
+              
+              let caseMatched = false;
+              let matchedCaseIndex = -1;
+              let stepsToExecute: any[] | undefined;
+              
+              // Check each case
+              if (switchConfig.cases && switchConfig.cases.length > 0) {
+                for (let i = 0; i < switchConfig.cases.length; i++) {
+                  const caseItem = switchConfig.cases[i];
+                  // Perform exact string comparison
+                  if (String(switchFieldValue) === String(caseItem.value)) {
+                    caseMatched = true;
+                    matchedCaseIndex = i;
+                    stepsToExecute = caseItem.then;
+                    context[`step_${step.id}`] = { 
+                      branch: `case_${i}`, 
+                      matchedValue: caseItem.value,
+                      matched: true 
+                    };
+                    break;
+                  }
+                }
+              }
+              
+              // If no case matched, use default
+              if (!caseMatched) {
+                stepsToExecute = switchConfig.default;
+                context[`step_${step.id}`] = { 
+                  branch: 'default', 
+                  matched: false,
+                  actualValue: switchFieldValue
+                };
+              }
+              
+              // Execute nested steps for the matching branch
+              if (stepsToExecute && stepsToExecute.length > 0) {
+                await this.executeNestedSteps(stepsToExecute, context, inputConfig);
+              }
             }
             break;
 
@@ -1064,6 +1170,188 @@ class ToolBuilderService {
 
     // Format output based on configuration
     return this.formatOutput(outputConfig, context);
+  }
+
+  // Execute nested steps recursively (for condition/switch branches)
+  private async executeNestedSteps(
+    nestedSteps: any[],
+    context: Record<string, any>,
+    inputConfig: FormField[]
+  ): Promise<void> {
+    for (const step of nestedSteps) {
+      try {
+        // Execute each nested step using the same logic as main steps
+        switch (step.type) {
+          case 'calculation':
+            const calcConfig = step.config.calculation;
+            if (!calcConfig || !calcConfig.formula) {
+              throw new Error(`CALCULATION_ERROR: Calculation step "${step.title || step.id}" is missing formula.`);
+            }
+
+            let formula = calcConfig.formula;
+            if (calcConfig.variables) {
+              calcConfig.variables.forEach((variable: any) => {
+                const fieldValue = context[variable.fieldId];
+                if (fieldValue !== undefined) {
+                  const regex = new RegExp(`\\b${variable.name}\\b`, 'g');
+                  formula = formula.replace(regex, String(fieldValue));
+                }
+              });
+            }
+
+            const calcResult = this.safeEvaluateExpression(formula);
+            context[`step_${step.id}`] = calcResult;
+            break;
+
+          case 'transform':
+            const transformConfig = step.config.transform;
+            if (!transformConfig || !transformConfig.inputFieldId || !transformConfig.transformType) {
+              throw new Error(`TRANSFORM_ERROR: Transform step "${step.title || step.id}" is missing configuration.`);
+            }
+
+            const inputValue = context[transformConfig.inputFieldId];
+            if (inputValue === undefined) {
+              throw new Error(`TRANSFORM_ERROR: Input field "${transformConfig.inputFieldId}" not found.`);
+            }
+
+            let transformed: any;
+            switch (transformConfig.transformType) {
+              case 'uppercase':
+                transformed = String(inputValue).toUpperCase();
+                break;
+              case 'lowercase':
+                transformed = String(inputValue).toLowerCase();
+                break;
+              case 'trim':
+                transformed = String(inputValue).trim();
+                break;
+              case 'format_currency':
+                transformed = new Intl.NumberFormat('en-US', {
+                  style: 'currency',
+                  currency: 'USD'
+                }).format(Number(inputValue));
+                break;
+              case 'format_date':
+                transformed = new Date(inputValue).toLocaleDateString();
+                break;
+              case 'extract_domain':
+                try {
+                  const url = new URL(String(inputValue));
+                  transformed = url.hostname;
+                } catch {
+                  transformed = inputValue;
+                }
+                break;
+              default:
+                transformed = inputValue;
+            }
+
+            context[`step_${step.id}`] = transformed;
+            break;
+
+          case 'condition':
+            const condition = step.config.condition;
+            if (condition) {
+              const fieldValue = context[condition.if.fieldId];
+              if (fieldValue === undefined) {
+                throw new Error(`CONDITION_ERROR: Field "${condition.if.fieldId}" not found.`);
+              }
+
+              let stepsToExecute: any[] | undefined;
+              const mainConditionMet = this.evaluateCondition(fieldValue, condition.if.operator, condition.if.value);
+
+              if (mainConditionMet) {
+                stepsToExecute = condition.then;
+                context[`step_${step.id}`] = { branch: 'then', conditionMet: true };
+              } else if (condition.elseIf) {
+                let elseIfMatched = false;
+                for (let i = 0; i < condition.elseIf.length; i++) {
+                  const elseIfBranch = condition.elseIf[i];
+                  const elseIfFieldValue = context[elseIfBranch.condition.fieldId];
+                  if (elseIfFieldValue === undefined) {
+                    throw new Error(`CONDITION_ERROR: Field "${elseIfBranch.condition.fieldId}" not found.`);
+                  }
+
+                  const elseIfMet = this.evaluateCondition(
+                    elseIfFieldValue,
+                    elseIfBranch.condition.operator,
+                    elseIfBranch.condition.value
+                  );
+
+                  if (elseIfMet) {
+                    stepsToExecute = elseIfBranch.then;
+                    elseIfMatched = true;
+                    context[`step_${step.id}`] = { branch: `elseif_${i}`, conditionMet: true };
+                    break;
+                  }
+                }
+
+                if (!elseIfMatched) {
+                  stepsToExecute = condition.else;
+                  context[`step_${step.id}`] = { branch: 'else', conditionMet: false };
+                }
+              } else {
+                stepsToExecute = condition.else;
+                context[`step_${step.id}`] = { branch: 'else', conditionMet: false };
+              }
+
+              if (stepsToExecute && stepsToExecute.length > 0) {
+                await this.executeNestedSteps(stepsToExecute, context, inputConfig);
+              }
+            }
+            break;
+
+          case 'switch':
+            const switchConfig = step.config.switch;
+            if (switchConfig) {
+              const switchFieldValue = context[switchConfig.fieldId];
+              if (switchFieldValue === undefined) {
+                throw new Error(`SWITCH_ERROR: Field "${switchConfig.fieldId}" not found.`);
+              }
+
+              let stepsToExecute: any[] | undefined;
+              let caseMatched = false;
+
+              if (switchConfig.cases) {
+                for (let i = 0; i < switchConfig.cases.length; i++) {
+                  const caseItem = switchConfig.cases[i];
+                  if (String(switchFieldValue) === String(caseItem.value)) {
+                    caseMatched = true;
+                    stepsToExecute = caseItem.then;
+                    context[`step_${step.id}`] = {
+                      branch: `case_${i}`,
+                      matchedValue: caseItem.value,
+                      matched: true
+                    };
+                    break;
+                  }
+                }
+              }
+
+              if (!caseMatched) {
+                stepsToExecute = switchConfig.default;
+                context[`step_${step.id}`] = {
+                  branch: 'default',
+                  matched: false,
+                  actualValue: switchFieldValue
+                };
+              }
+
+              if (stepsToExecute && stepsToExecute.length > 0) {
+                await this.executeNestedSteps(stepsToExecute, context, inputConfig);
+              }
+            }
+            break;
+
+          default:
+            console.log(`Nested step type ${step.type} not yet implemented`);
+            break;
+        }
+      } catch (stepError: any) {
+        console.error(`Error executing nested step ${step.id}:`, stepError);
+        throw stepError;
+      }
+    }
   }
 
   // Generate complete tool schema for publishing
